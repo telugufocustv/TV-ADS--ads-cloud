@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TV AD MANAGER PLAYER</title>
+<style>
+html,body{margin:0;width:100%;height:100%;background:#000;color:#fff;font-family:Arial;overflow:hidden}
+#screen{width:100vw;height:100vh;display:grid;place-items:center;background:#000}
+#screen img,#screen video{width:100%;height:100%;object-fit:contain}
+#pair{position:fixed;inset:0;display:grid;place-items:center;background:#071126;text-align:center}
+#pair .box{padding:40px;border-radius:20px;background:#102348}
+#code{font-size:56px;font-weight:900;letter-spacing:8px;margin:20px 0}
+#status{position:fixed;right:10px;bottom:10px;background:#000a;padding:5px 8px;font-size:11px}
+</style>
+</head>
+<body>
+<div id="screen"></div>
+<div id="pair"><div class="box"><h1>TV AD MANAGER</h1><p>Pair this player from the Admin Dashboard</p><div id="code">------</div><p id="device">Connecting…</p></div></div>
+<div id="status">Connecting…</div>
+<script>
+const API="/api";
+const deviceKey="tam_device_id";
+let deviceId=localStorage.getItem(deviceKey);
+if(!deviceId){deviceId="dev_"+crypto.randomUUID();localStorage.setItem(deviceKey,deviceId)}
+const pair=document.getElementById("pair"), code=document.getElementById("code"), device=document.getElementById("device"), screen=document.getElementById("screen"), statusEl=document.getElementById("status");
+let config=null,index=0,timer=null,currentKey="";
+const DB="tam-player-cache-v1";
+function openDB(){return new Promise((resolve,reject)=>{const r=indexedDB.open(DB,1);r.onupgradeneeded=()=>r.result.createObjectStore("media");r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
+async function cacheMedia(ad){
+  if(!ad?.fileUrl)return ad?.fileUrl;
+  try{
+    const db=await openDB();
+    const tx=db.transaction("media","readonly"); const req=tx.objectStore("media").get(ad.fileUrl);
+    const blob=await new Promise((res,rej)=>{req.onsuccess=()=>res(req.result);req.onerror=()=>rej(req.error)});
+    if(blob)return URL.createObjectURL(blob);
+  }catch{}
+  try{
+    const r=await fetch(ad.fileUrl,{cache:"no-store"}); if(!r.ok) throw new Error();
+    const blob=await r.blob(); const db=await openDB();
+    await new Promise((res,rej)=>{const tx=db.transaction("media","readwrite");tx.objectStore("media").put(blob,ad.fileUrl);tx.oncomplete=res;tx.onerror=()=>rej(tx.error)});
+    return URL.createObjectURL(blob);
+  }catch{return ad.fileUrl}
+}
+
+async function register(){
+  const r=await fetch(API+"/device/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({deviceId,deviceName:"TV Player"})});
+  return r.json();
+}
+async function sync(){
+  try{
+    const r=await fetch(API+"/device/"+encodeURIComponent(deviceId)+"/config?ts="+Date.now());
+    if(!r.ok) throw new Error("offline");
+    const c=await r.json(); config=c;
+    if(!c.paired){pair.style.display="grid";code.textContent=c.pairCode||"------";device.textContent="Device ID: "+deviceId;statusEl.textContent="Waiting for pairing";return}
+    pair.style.display="none";statusEl.textContent="Online • "+(c.screen?.name||"TV");
+    if(c.playlist?.ads?.length) { if(currentKey!==c.playlist.id){currentKey=c.playlist.id;index=0;play()} }
+    else {screen.innerHTML='<div style="font-size:24px">No playlist assigned</div>'}
+  }catch(e){statusEl.textContent="Offline • cached player";playCached()}
+}
+async function heartbeat(){try{await fetch(API+"/device/"+encodeURIComponent(deviceId)+"/heartbeat",{method:"POST"})}catch{}}
+async function play(){
+  clearTimeout(timer);const ads=config?.playlist?.ads||[];if(!ads.length)return;
+  if(index>=ads.length)index=0;const ad=ads[index];screen.innerHTML="";
+  const src=await cacheMedia(ad);
+  if(index>=ads.length)return;
+  if(ad.fileType?.startsWith("video/")){
+    const v=document.createElement("video");v.src=src;v.autoplay=true;v.playsInline=true;v.controls=false;screen.appendChild(v);
+    v.onended=()=>{report(ad);index=(index+1)%ads.length;play()};
+    v.onerror=()=>{index=(index+1)%ads.length;play()};v.play().catch(()=>{});
+  }else{
+    const img=document.createElement("img");img.src=src;screen.appendChild(img);
+    timer=setTimeout(()=>{report(ad);index=(index+1)%ads.length;play()},Math.max(1,Number(ad.duration)||10)*1000);
+  }
+}
+function playCached(){if(config?.playlist?.ads?.length){pair.style.display="none";play()}}
+async function report(ad){try{await fetch(API+"/device/"+encodeURIComponent(deviceId)+"/playback",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({adId:ad.id,playlistId:config?.playlist?.id})})}catch{}}
+(async()=>{const r=await register();code.textContent=r.pairCode||"------";setInterval(sync,10000);setInterval(heartbeat,15000);sync()})();
+</script>
+</body>
+</html>

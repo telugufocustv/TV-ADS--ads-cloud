@@ -1,0 +1,35 @@
+{
+  "name": "tv-ad-manager-pro-all-in-one",
+  "version": "4.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node dev-runner.mjs",
+    "server": "node server.js",
+    "build": "vite build",
+    "start": "node server.js",
+    "build:web": "vite build",
+    "android:init": "npx cap add android",
+    "android:sync": "npx cap sync android",
+    "android:debug": "npx cap sync android && cd android && gradlew.bat assembleDebug",
+    "build:apk": "npm run build:web && npx cap sync android && cd android && gradlew.bat assembleDebug",
+    "build:all": "npm run build:web && npx cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.6.9",
+    "@capacitor/core": "^7.6.9",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.2",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.6.9",
+    "@vitejs/plugin-react": "^5.0.4",
+    "concurrently": "^9.2.1",
+    "typescript": "^7.0.2",
+    "vite": "^7.1.5"
+  }
+}
