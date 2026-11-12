@@ -13,11 +13,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-const JWT_SECRET =
-  process.env.JWT_SECRET || "tv-ad-manager-pro-secret";
-
-const ADMIN_PASSWORD =
-  process.env.ADMIN_PASSWORD || "admin123";
+const JWT_SECRET = process.env.JWT_SECRET || "tv-ad-manager-pro-secret";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
 
 const DATA_DIR = path.join(__dirname, "data");
 const UPLOAD_DIR = path.join(__dirname, "uploads");
@@ -45,34 +42,26 @@ function filePath(name) {
 
 function readData(name) {
   const file = filePath(name);
-
   if (!fs.existsSync(file)) {
-    fs.writeFileSync(
-      file,
-      JSON.stringify(defaults[name] || [], null, 2),
-      "utf8"
-    );
+    fs.writeFileSync(file, JSON.stringify(defaults[name] || [], null, 2), "utf8");
   }
-
   try {
-    return JSON.parse(
-      fs.readFileSync(file, "utf8")
-    );
+    return JSON.parse(fs.readFileSync(file, "utf8"));
   } catch {
     return defaults[name] || [];
   }
 }
 
 function writeData(name, data) {
-  fs.writeFileSync(
-    filePath(name),
-    JSON.stringify(data, null, 2),
-    "utf8"
-  );
+  fs.writeFileSync(filePath(name), JSON.stringify(data, null, 2), "utf8");
 }
 
 function makeId(prefix = "id") {
   return `${prefix}_${crypto.randomBytes(6).toString("hex")}`;
+}
+
+function now() {
+  return new Date().toISOString();
 }
 
 function hashPassword(password) {
@@ -120,11 +109,6 @@ function writeAuth(authData) {
   fs.writeFileSync(AUTH_FILE, JSON.stringify(authData, null, 2), "utf8");
 }
 
-function now() {
-  return new Date().toISOString();
-}
-
-// Enable unrestricted CORS for external network requests & tunnels
 app.use(cors({
   origin: true,
   credentials: true,
@@ -132,67 +116,31 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization", "Accept", "Origin"]
 }));
 
-app.use(express.json({
-  limit: "50mb"
-}));
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-app.use(express.urlencoded({
-  extended: true,
-  limit: "50mb"
-}));
-
-app.use(
-  "/uploads",
-  express.static(UPLOAD_DIR)
-);
-
-app.use(
-  express.static(PUBLIC_DIR)
-);
-
-// Serve built frontend files (dist)
+app.use("/uploads", express.static(UPLOAD_DIR));
+app.use(express.static(PUBLIC_DIR));
 if (fs.existsSync(DIST_DIR)) {
   app.use(express.static(DIST_DIR));
 }
 
-/* ================= AUTH ================= */
-
 function auth(req, res, next) {
-  const header =
-    req.headers.authorization || "";
-
+  const header = req.headers.authorization || "";
   if (!header.startsWith("Bearer ")) {
-    return res.status(401).json({
-      error: "Login required"
-    });
+    return res.status(401).json({ error: "Login required" });
   }
-
   try {
-    req.user = jwt.verify(
-      header.substring(7),
-      JWT_SECRET
-    );
-
+    req.user = jwt.verify(header.substring(7), JWT_SECRET);
     next();
   } catch {
-    res.status(401).json({
-      error: "Session expired"
-    });
+    res.status(401).json({ error: "Session expired" });
   }
 }
 
-/* ================= HEALTH ================= */
-
 app.get("/api/health", (req, res) => {
-  res.json({
-    ok: true,
-    service: "TV AD MANAGER PRO",
-    version: "2.0.0",
-    time: now()
-  });
+  res.json({ ok: true, service: "TV AD MANAGER PRO", version: "2.0.0", time: now() });
 });
-
-/* ================= LOGIN ================= */
 
 app.post("/api/login", (req, res) => {
   const username = String(req.body?.username || "admin");
@@ -200,17 +148,10 @@ app.post("/api/login", (req, res) => {
   const authData = readAuth();
 
   if (username !== authData.username || !verifyPassword(password, authData.passwordHash)) {
-    return res.status(401).json({
-      error: "Invalid username or password"
-    });
+    return res.status(401).json({ error: "Invalid username or password" });
   }
 
-  const token = jwt.sign(
-    { role: "admin", username: authData.username },
-    JWT_SECRET,
-    { expiresIn: "7d" }
-  );
-
+  const token = jwt.sign({ role: "admin", username: authData.username }, JWT_SECRET, { expiresIn: "7d" });
   res.json({ token, username: authData.username });
 });
 
@@ -239,363 +180,331 @@ app.post("/api/change-password", auth, (req, res) => {
   res.json({ ok: true, username: next.username });
 });
 
-/* ================= STATE ================= */
+app.get("/api/state", auth, (req, res) => {
+  res.json({
+    areas: readData("areas"),
+    screens: readData("screens"),
+    ads: readData("ads"),
+    playlists: readData("playlists"),
+    schedules: readData("schedules"),
+    devices: readData("devices"),
+    playback: readData("playback").slice(-5000)
+  });
+});
 
-app.get(
-  "/api/state",
-  auth,
-  (req, res) => {
-    res.json({
-      areas: readData("areas"),
-      screens: readData("screens"),
-      ads: readData("ads"),
-      playlists: readData("playlists"),
-      schedules: readData("schedules"),
-      devices: readData("devices"),
-      playback:
-        readData("playback").slice(-5000)
-    });
-  }
-);
-
-/* ================= SAVE DATA ================= */
-
-for (const name of [
-  "areas",
-  "screens",
-  "ads",
-  "playlists",
-  "schedules"
-]) {
-  app.put(
-    `/api/${name}`,
-    auth,
-    (req, res) => {
-      if (!Array.isArray(req.body)) {
-        return res.status(400).json({
-          error: "Array expected"
-        });
-      }
-
-      writeData(name, req.body);
-
-      res.json(req.body);
+for (const name of ["areas", "screens", "ads", "playlists", "schedules"]) {
+  app.put(`/api/${name}`, auth, (req, res) => {
+    if (!Array.isArray(req.body)) {
+      return res.status(400).json({ error: "Array expected" });
     }
-  );
+    writeData(name, req.body);
+    res.json(req.body);
+  });
 }
 
-/* ================= UPLOAD ================= */
-
-const storage =
-  multer.diskStorage({
-    destination: (req, file, cb) => {
-      cb(null, UPLOAD_DIR);
-    },
-
-    filename: (req, file, cb) => {
-      const ext =
-        path.extname(
-          file.originalname
-        ).toLowerCase();
-
-      cb(
-        null,
-        `${Date.now()}_${crypto.randomBytes(6).toString("hex")}${ext}`
-      );
-    }
-  });
-
-const allowedTypes = [
-  "video/mp4",
-  "video/webm",
-  "image/jpeg",
-  "image/png",
-  "image/webp"
-];
-
-const upload = multer({
-  storage,
-
-  limits: {
-    fileSize: 100 * 1024 * 1024
-  },
-
-  fileFilter: (req, file, cb) => {
-    cb(
-      null,
-      allowedTypes.includes(
-        file.mimetype
-      )
-    );
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${Date.now()}_${crypto.randomBytes(6).toString("hex")}${ext}`);
   }
 });
 
-app.post(
-  "/api/upload",
-  auth,
-  upload.single("file"),
-  (req, res) => {
-    if (!req.file) {
-      return res.status(400).json({
-        error:
-          "MP4, WebM, JPG, PNG, WebP files only"
-      });
-    }
+const allowedTypes = ["video/mp4", "video/webm", "image/jpeg", "image/png", "image/webp"];
 
-    res.json({
-      fileName:
-        req.file.originalname,
+const upload = multer({
+  storage,
+  limits: { fileSize: 100 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => cb(null, allowedTypes.includes(file.mimetype))
+});
 
-      fileType:
-        req.file.mimetype,
-
-      fileSize:
-        req.file.size,
-
-      fileKey:
-        req.file.filename,
-
-      fileUrl:
-        `/uploads/${req.file.filename}`
-    });
+app.post("/api/upload", auth, upload.single("file"), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "MP4, WebM, JPG, PNG, WebP files only" });
   }
-);
+  res.json({
+    fileName: req.file.originalname,
+    fileType: req.file.mimetype,
+    fileSize: req.file.size,
+    fileKey: req.file.filename,
+    fileUrl: `/uploads/${req.file.filename}`
+  });
+});
 
-app.delete(
-  "/api/upload/:key",
-  auth,
-  (req, res) => {
-    const safe =
-      path.basename(
-        req.params.key
-      );
+app.delete("/api/upload/:key", auth, (req, res) => {
+  const safe = path.basename(req.params.key);
+  const file = path.join(UPLOAD_DIR, safe);
+  if (fs.existsSync(file)) fs.unlinkSync(file);
+  res.json({ ok: true });
+});
 
-    const file =
-      path.join(
-        UPLOAD_DIR,
-        safe
-      );
+app.post("/api/device/register", (req, res) => {
+  const deviceId = req.body?.deviceId;
+  const deviceName = req.body?.deviceName || "TV Player";
+  if (!deviceId) return res.status(400).json({ error: "deviceId required" });
 
-    if (fs.existsSync(file)) {
-      fs.unlinkSync(file);
-    }
+  const devices = readData("devices");
+  let device = devices.find(d => String(d.deviceId) === String(deviceId));
 
-    res.json({ ok: true });
-  }
-);
-
-/* ================= DEVICE REGISTER ================= */
-
-app.post(
-  "/api/device/register",
-  (req, res) => {
-    const deviceId =
-      req.body?.deviceId;
-
-    const deviceName =
-      req.body?.deviceName ||
-      "TV Player";
-
-    if (!deviceId) {
-      return res.status(400).json({
-        error: "deviceId required"
-      });
-    }
-
-    const devices =
-      readData("devices");
-
-    let device =
-      devices.find(
-        d =>
-          String(d.deviceId) ===
-          String(deviceId)
-      );
-
-    if (!device) {
-      device = {
-        id: makeId("dev"),
-        deviceId,
-        deviceName,
-        pairCode:
-          String(
-            Math.floor(
-              100000 +
-              Math.random() * 900000
-            )
-          ),
-        status: "pending",
-        screenId: null,
-        createdAt: now(),
-        lastSeen: now()
-      };
-
-      devices.push(device);
-    } else {
-      device.lastSeen = now();
-    }
-
-    writeData(
-      "devices",
-      devices
-    );
-
-    res.json({
-      deviceId:
-        device.deviceId,
-
-      deviceName:
-        device.deviceName,
-
-      paired:
-        device.status === "paired",
-
-      pairCode:
-        device.pairCode,
-
-      screenId:
-        device.screenId
-    });
-  }
-);
-
-/* ================= DEVICE CONFIG ================= */
-
-app.get(
-  "/api/device/:deviceId/config",
-  (req, res) => {
-    const devices =
-      readData("devices");
-
-    const device =
-      devices.find(
-        d =>
-          String(d.deviceId) ===
-          String(
-            req.params.deviceId
-          )
-      );
-
-    if (!device) {
-      return res.status(404).json({
-        paired: false
-      });
-    }
-
+  if (!device) {
+    device = {
+      id: makeId("dev"),
+      deviceId,
+      deviceName,
+      pairCode: String(Math.floor(100000 + Math.random() * 900000)),
+      status: "pending",
+      screenId: null,
+      createdAt: now(),
+      lastSeen: now()
+    };
+    devices.push(device);
+  } else {
     device.lastSeen = now();
+  }
 
-    writeData(
-      "devices",
-      devices
-    );
+  writeData("devices", devices);
+  res.json({
+    deviceId: device.deviceId,
+    deviceName: device.deviceName,
+    paired: device.status === "paired",
+    pairCode: device.pairCode,
+    screenId: device.screenId
+  });
+});
 
-    if (
-      device.status !== "paired" ||
-      !device.screenId
-    ) {
-      return res.json({
-        paired: false,
-        pairCode:
-          device.pairCode,
-        deviceName:
-          device.deviceName
-      });
+app.get("/api/device/:deviceId/config", (req, res) => {
+  const devices = readData("devices");
+  const device = devices.find(d => String(d.deviceId) === String(req.params.deviceId));
+  if (!device) return res.status(404).json({ paired: false });
+
+  device.lastSeen = now();
+  writeData("devices", devices);
+
+  if (device.status !== "paired" || !device.screenId) {
+    return res.json({ paired: false, pairCode: device.pairCode, deviceName: device.deviceName });
+  }
+
+  const screens = readData("screens");
+  const ads = readData("ads");
+  const playlists = readData("playlists");
+  const schedules = readData("schedules");
+
+  const screen = screens.find(s => String(s.id) === String(device.screenId));
+  if (!screen) return res.status(404).json({ paired: false, error: "Screen not found" });
+
+  screen.status = "online";
+  screen.lastSeen = now();
+  writeData("screens", screens);
+
+  let playlistId = screen.playlistId || null;
+  const date = new Date();
+  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const today = dayNames[date.getDay()];
+  const minutes = date.getHours() * 60 + date.getMinutes();
+
+  const activeSchedules = schedules.filter(s => s.active && String(s.screenId) === String(screen.id));
+  for (const schedule of activeSchedules) {
+    const scheduleDays = Array.isArray(schedule.days) ? schedule.days : [];
+    const start = Number(schedule.start || 0);
+    const end = Number(schedule.end || 1440);
+    const timeOK = start <= end ? minutes >= start && minutes < end : minutes >= start || minutes < end;
+    const dayOK = scheduleDays.length === 0 || scheduleDays.includes(today);
+    if (timeOK && dayOK) playlistId = schedule.playlistId;
+  }
+
+  const playlist = playlists.find(p => String(p.id) === String(playlistId));
+  const playlistAds = (playlist?.adIds || [])
+    .map(id => ads.find(ad => String(ad.id) === String(id)))
+    .filter(Boolean);
+
+  res.json({
+    paired: true,
+    screen,
+    playlist: playlist ? { ...playlist, ads: playlistAds } : null,
+    ads: playlistAds,
+    serverTime: now(),
+    heartbeatInterval: 15000
+  });
+});
+
+app.post("/api/device/:deviceId/heartbeat", (req, res) => {
+  const devices = readData("devices");
+  const device = devices.find(d => String(d.deviceId) === String(req.params.deviceId));
+  if (!device) return res.status(404).json({ error: "Device not registered" });
+
+  device.lastSeen = now();
+  writeData("devices", devices);
+
+  if (device.screenId) {
+    const screens = readData("screens");
+    const screen = screens.find(s => String(s.id) === String(device.screenId));
+    if (screen) {
+      screen.status = "online";
+      screen.lastSeen = device.lastSeen;
+      writeData("screens", screens);
     }
+  }
+  res.json({ ok: true, lastSeen: device.lastSeen });
+});
 
-    const screens =
-      readData("screens");
+app.get("/api/pair/pending", auth, (req, res) => {
+  res.json(readData("devices").filter(d => d.status === "pending"));
+});
 
-    const ads =
-      readData("ads");
+app.post("/api/pair/approve", auth, (req, res) => {
+  const pairCode = String(req.body?.pairCode || "");
+  const name = req.body?.name || "TV Screen";
+  const areaId = req.body?.areaId || "";
 
-    const playlists =
-      readData("playlists");
+  const devices = readData("devices");
+  const device = devices.find(d => String(d.pairCode) === pairCode && d.status === "pending");
+  if (!device) return res.status(404).json({ error: "Pairing code not found" });
 
-    const schedules =
-      readData("schedules");
+  const screens = readData("screens");
+  const screen = {
+    id: makeId("tv"),
+    name,
+    areaId,
+    deviceId: device.deviceId,
+    status: "online",
+    lastSeen: now(),
+    playlistId: null,
+    createdAt: now()
+  };
 
-    const screen =
-      screens.find(
-        s =>
-          String(s.id) ===
-          String(device.screenId)
-      );
+  screens.push(screen);
+  writeData("screens", screens);
 
-    if (!screen) {
-      return res.status(404).json({
-        paired: false,
-        error: "Screen not found"
-      });
-    }
+  device.status = "paired";
+  device.screenId = screen.id;
+  device.lastSeen = now();
+  writeData("devices", devices);
 
-    screen.status = "online";
-    screen.lastSeen = now();
+  res.json(screen);
+});
 
-    writeData(
-      "screens",
-      screens
-    );
+app.get("/api/tv/:id/player", (req, res) => {
+  const screenId = req.params.id;
+  const screens = readData("screens");
+  const screen = screens.find(s => String(s.id) === String(screenId));
+  if (!screen) return res.status(404).json({ error: "TV Screen not found", screenId });
 
-    let playlistId =
-      screen.playlistId || null;
+  const ads = readData("ads");
+  const playlists = readData("playlists");
+  const schedules = readData("schedules");
 
-    const date = new Date();
+  let playlistId = screen.playlistId || null;
+  const date = new Date();
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const today = days[date.getDay()];
+  const minutes = date.getHours() * 60 + date.getMinutes();
 
-    const dayNames = [
-      "Sun",
-      "Mon",
-      "Tue",
-      "Wed",
-      "Thu",
-      "Fri",
-      "Sat"
-    ];
+  const screenSchedules = schedules.filter(s => s.active && String(s.screenId) === String(screenId));
+  for (const schedule of screenSchedules) {
+    const scheduleDays = Array.isArray(schedule.days) ? schedule.days : [];
+    const start = Number(schedule.start || 0);
+    const end = Number(schedule.end || 1440);
+    const timeOK = start <= end ? minutes >= start && minutes < end : minutes >= start || minutes < end;
+    const dayOK = scheduleDays.length === 0 || scheduleDays.includes(today);
+    if (timeOK && dayOK) playlistId = schedule.playlistId;
+  }
 
-    const today =
-      dayNames[date.getDay()];
+  const playlist = playlists.find(p => String(p.id) === String(playlistId));
+  const playerAds = (playlist?.adIds || [])
+    .map(id => ads.find(ad => String(ad.id) === String(id)))
+    .filter(ad => ad && (ad.fileUrl || ad.fileKey));
 
-    const minutes =
-      date.getHours() * 60 +
-      date.getMinutes();
+  screen.status = "online";
+  screen.lastSeen = now();
+  writeData("screens", screens);
 
-    const activeSchedules =
-      schedules.filter(
-        s =>
-          s.active &&
-          String(s.screenId) ===
-          String(screen.id)
-      );
+  res.json({
+    ok: true,
+    screen,
+    playlist: playlist ? { ...playlist, ads: playerAds } : null,
+    ads: playerAds,
+    serverTime: now(),
+    heartbeatInterval: 15000
+  });
+});
 
-    for (const schedule of activeSchedules) {
-      const scheduleDays =
-        Array.isArray(schedule.days)
-          ? schedule.days
-          : [];
+app.post("/api/tv/:id/heartbeat", (req, res) => {
+  const screens = readData("screens");
+  const screen = screens.find(s => String(s.id) === String(req.params.id));
+  if (!screen) return res.status(404).json({ error: "TV Screen not found" });
 
-      const start =
-        Number(schedule.start || 0);
+  screen.status = "online";
+  screen.lastSeen = now();
+  writeData("screens", screens);
+  res.json({ ok: true, lastSeen: screen.lastSeen });
+});
 
-      const end =
-        Number(schedule.end || 1440);
+app.post("/api/tv/:id/playback", (req, res) => {
+  const screens = readData("screens");
+  const screen = screens.find(s => String(s.id) === String(req.params.id));
+  if (!screen) return res.status(404).json({ error: "TV Screen not found" });
 
-      const timeOK =
-        start <= end
-          ? minutes >= start &&
-            minutes < end
-          : minutes >= start ||
-            minutes < end;
+  const playback = readData("playback");
+  const report = { id: makeId("play"), createdAt: now(), screenId: screen.id, ...req.body };
+  playback.push(report);
+  writeData("playback", playback.slice(-20000));
 
-      const dayOK =
-        scheduleDays.length === 0 ||
-        scheduleDays.includes(today);
+  screen.status = "online";
+  screen.lastSeen = report.createdAt;
+  writeData("screens", screens);
+  res.json(report);
+});
 
-      if (timeOK && dayOK) {
-        playlistId =
-          schedule.playlistId;
-      }
-    }
+app.get("/api/backup", auth, (req, res) => {
+  res.json({
+    version: "2.0.0",
+    createdAt: now(),
+    areas: readData("areas"),
+    screens: readData("screens"),
+    ads: readData("ads"),
+    playlists: readData("playlists"),
+    schedules: readData("schedules")
+  });
+});
 
-    const playlist =
-      playlists.find(
-        p =>
-          String(p.id) ===
+app.post("/api/restore", auth, (req, res) => {
+  const backup = req.body || {};
+  for (const name of ["areas", "screens", "ads", "playlists", "schedules"]) {
+    if (Array.isArray(backup[name])) writeData(name, backup[name]);
+  }
+  res.json({ ok: true });
+});
+
+app.post("/api/clear", auth, (req, res) => {
+  for (const name of ["areas", "screens", "ads", "playlists", "schedules", "playback"]) {
+    writeData(name, []);
+  }
+  res.json({ ok: true });
+});
+
+app.get("/player", (req, res) => {
+  const file = path.join(PUBLIC_DIR, "player.html");
+  if (!fs.existsSync(file)) return res.status(404).send("player.html not found");
+  res.sendFile(file);
+});
+
+app.use("/api", (req, res) => {
+  res.status(404).json({ error: "API endpoint not found", path: req.originalUrl });
+});
+
+app.use((req, res) => {
+  const indexFile = path.join(DIST_DIR, "index.html");
+  if (fs.existsSync(indexFile)) {
+    return res.sendFile(indexFile);
+  }
+  res.status(404).send("Frontend build (dist/index.html) not found.");
+});
+
+app.use((error, req, res, next) => {
+  console.error("SERVER ERROR:", error);
+  res.status(500).json({ error: error.message || "Internal server error" });
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`TV AD MANAGER PRO running on port ${PORT}`);
+});
