@@ -29,6 +29,12 @@ function mediaUrl(value) {
   return `${getServerOrigin()}/${raw}`;
 }
 
+function extractYouTubeId(url) {
+  const raw = String(url || "").trim();
+  const match = raw.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/))([a-zA-Z0-9_-]{11})/);
+  return match ? match[1] : null;
+}
+
 const NAV = [
   ["dashboard", "🏠 Dashboard"],
   ["areas", "📍 Areas"],
@@ -88,6 +94,7 @@ const emptyData = {
   clients: [],
   billings: [],
   tickers: [],
+  socials: [],
   cloudEnabled: false,
 };
 
@@ -98,8 +105,8 @@ function AdminApp() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  async function loadData() {
-    setLoading(true);
+  async function loadData(silent = false) {
+    if (!silent) setLoading(true);
     setError("");
     try {
       const result = await api("/state");
@@ -117,13 +124,15 @@ function AdminApp() {
         setToken(null);
       }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
   useEffect(() => {
     if (token) {
       loadData();
+      const autoRefresh = setInterval(() => loadData(true), 20000);
+      return () => clearInterval(autoRefresh);
     } else {
       setLoading(false);
     }
@@ -205,7 +214,7 @@ function AdminApp() {
           </div>
 
           <div style={{ display: "flex", gap: "10px" }}>
-            <button className="btn secondary" onClick={loadData} style={{ padding: "8px 16px", cursor: "pointer", borderRadius: "6px" }}>
+            <button className="btn secondary" onClick={() => loadData(false)} style={{ padding: "8px 16px", cursor: "pointer", borderRadius: "6px" }}>
               ↻ Refresh
             </button>
             <button className="btn danger" onClick={() => { localStorage.removeItem("tam_token"); setToken(null); }} style={{ padding: "8px 16px", cursor: "pointer", borderRadius: "6px", background: "#ef4444", color: "#fff", border: "none" }}>
@@ -217,21 +226,21 @@ function AdminApp() {
         {error && <div className="notice" style={{ padding: "12px", background: "#fee2e2", color: "#991b1b", borderRadius: "8px", marginBottom: "15px" }}>{error}</div>}
 
         {page === "dashboard" && <Dashboard counts={counts} data={data} setPage={setPage} />}
-        {page === "areas" && <Areas data={data} setData={setData} reload={loadData} />}
-        {page === "screens" && <Screens data={data} setData={setData} reload={loadData} />}
-        {page === "ads" && <Ads data={data} setData={setData} reload={loadData} />}
-        {page === "playlists" && <Playlists data={data} setData={setData} reload={loadData} />}
-        {page === "schedules" && <Schedules data={data} setData={setData} reload={loadData} />}
+        {page === "areas" && <Areas data={data} reload={() => loadData(true)} />}
+        {page === "screens" && <Screens data={data} reload={() => loadData(true)} />}
+        {page === "ads" && <Ads data={data} reload={() => loadData(true)} />}
+        {page === "playlists" && <Playlists data={data} reload={() => loadData(true)} />}
+        {page === "schedules" && <Schedules data={data} reload={() => loadData(true)} />}
         {page === "live" && <LiveCenter data={data} />}
-        {page === "franchise" && <Franchise data={data} setData={setData} />}
-        {page === "crm" && <CRM data={data} setData={setData} />}
-        {page === "billing" && <Billing data={data} setData={setData} />}
-        {page === "news" && <FlashNews data={data} setData={setData} />}
-        {page === "social" && <SocialMedia />}
-        {page === "marketing" && <MarketingLeads />}
+        {page === "franchise" && <Franchise data={data} reload={() => loadData(true)} />}
+        {page === "crm" && <CRM data={data} reload={() => loadData(true)} />}
+        {page === "billing" && <Billing data={data} reload={() => loadData(true)} />}
+        {page === "news" && <FlashNews data={data} reload={() => loadData(true)} />}
+        {page === "social" && <SocialMedia data={data} reload={() => loadData(true)} />}
+        {page === "marketing" && <MarketingLeads data={data} />}
         {page === "aitools" && <AITools />}
-        {page === "reports" && <Reports data={data} />}
-        {page === "settings" && <Settings reload={loadData} cloudEnabled={data.cloudEnabled} />}
+        {page === "reports" && <Reports data={data} reload={() => loadData(true)} />}
+        {page === "settings" && <Settings reload={() => loadData(false)} cloudEnabled={data.cloudEnabled} />}
       </main>
     </div>
   );
@@ -336,6 +345,7 @@ function Dashboard({ counts, data, setPage }) {
           <button className="btn" style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => setPage("screens")}>📺 Manage TVs</button>
           <button className="btn" style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => setPage("live")}>🔴 Live Status</button>
           <button className="btn" style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => setPage("news")}>📰 Flash News Ticker</button>
+          <button className="btn" style={{ padding: "8px 16px", background: "#10b981", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => setPage("reports")}>📊 Live Reports</button>
         </div>
       </div>
 
@@ -348,33 +358,36 @@ function Dashboard({ counts, data, setPage }) {
             <thead>
               <tr style={{ borderBottom: "2px solid #e2e8f0" }}>
                 <th style={{ padding: "10px" }}>TV Name</th>
-                <th style={{ padding: "10px" }}>City / Area</th>
+                <th style={{ padding: "10px" }}>Short Player URL</th>
                 <th style={{ padding: "10px" }}>Assigned Playlist</th>
                 <th style={{ padding: "10px" }}>Status</th>
                 <th style={{ padding: "10px" }}>Live Action</th>
               </tr>
             </thead>
             <tbody>
-              {data.screens.map((screen) => (
-                <tr key={screen.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                  <td style={{ padding: "10px", fontWeight: "600" }}>{screen.name}</td>
-                  <td style={{ padding: "10px" }}>{data.areas.find(a => a.id === screen.areaId)?.name || "Remote TV"}</td>
-                  <td style={{ padding: "10px" }}>{data.playlists.find(p => p.id === screen.playlistId)?.name || "No Playlist"}</td>
-                  <td style={{ padding: "10px" }}>
-                    <span style={{ padding: "4px 8px", borderRadius: "4px", fontSize: "12px", fontWeight: "bold", background: screen.status === "online" ? "#dcfce7" : "#fee2e2", color: screen.status === "online" ? "#15803d" : "#b91c1c" }}>
-                      {screen.status || "offline"}
-                    </span>
-                  </td>
-                  <td style={{ padding: "10px" }}>
-                    <button
-                      onClick={() => window.open(`${getServerOrigin()}/?player=${encodeURIComponent(screen.id)}`, "_blank", "noopener,noreferrer")}
-                      style={{ padding: "6px 12px", background: "#10b981", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "12px" }}
-                    >
-                      ▶ Watch / Launch
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {data.screens.map((screen, idx) => {
+                const shortUrl = `${getServerOrigin()}/tv/${screen.shortCode || idx + 1}`;
+                return (
+                  <tr key={screen.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                    <td style={{ padding: "10px", fontWeight: "600" }}>{screen.name}</td>
+                    <td style={{ padding: "10px", fontSize: "12px", color: "#2563eb" }}>{shortUrl}</td>
+                    <td style={{ padding: "10px" }}>{data.playlists.find(p => p.id === screen.playlistId)?.name || "No Playlist"}</td>
+                    <td style={{ padding: "10px" }}>
+                      <span style={{ padding: "4px 8px", borderRadius: "4px", fontSize: "12px", fontWeight: "bold", background: screen.status === "online" ? "#dcfce7" : "#fee2e2", color: screen.status === "online" ? "#15803d" : "#b91c1c" }}>
+                        {screen.status || "offline"}
+                      </span>
+                    </td>
+                    <td style={{ padding: "10px" }}>
+                      <button
+                        onClick={() => window.open(shortUrl, "_blank", "noopener,noreferrer")}
+                        style={{ padding: "6px 12px", background: "#10b981", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "12px" }}
+                      >
+                        ▶ Watch / Launch
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -394,16 +407,34 @@ function StatCard({ icon, title, value }) {
   );
 }
 
+/* ================= 1. AREAS MODULE (ADD / EDIT / DELETE) ================= */
 function Areas({ data, reload }) {
   const [open, setOpen] = useState(false);
+  const [editId, setEditId] = useState(null);
   const [form, setForm] = useState({ name: "", city: "", state: "" });
+
+  function openNew() {
+    setEditId(null);
+    setForm({ name: "", city: "", state: "" });
+    setOpen(true);
+  }
+
+  function openEdit(area) {
+    setEditId(area.id);
+    setForm({ name: area.name, city: area.city || "", state: area.state || "" });
+    setOpen(true);
+  }
 
   async function save() {
     if (!form.name.trim()) return alert("Area Name ఇవ్వండి.");
-    const newArea = { id: `area_${Date.now()}`, name: form.name.trim(), city: form.city.trim(), state: form.state.trim(), active: true };
+    let next;
+    if (editId) {
+      next = data.areas.map(a => a.id === editId ? { ...a, name: form.name.trim(), city: form.city.trim(), state: form.state.trim() } : a);
+    } else {
+      next = [...data.areas, { id: `area_${Date.now()}`, name: form.name.trim(), city: form.city.trim(), state: form.state.trim(), active: true }];
+    }
     try {
-      await api("/areas", { method: "PUT", body: JSON.stringify([...data.areas, newArea]) });
-      setForm({ name: "", city: "", state: "" });
+      await api("/areas", { method: "PUT", body: JSON.stringify(next) });
       setOpen(false);
       await reload();
     } catch (err) {
@@ -412,7 +443,7 @@ function Areas({ data, reload }) {
   }
 
   async function remove(id) {
-    if (!confirm("ఈ Areaను తొలగించాలా? (సంబంధిత TV లొకేషన్ కూడా ఆటోమేటిక్‌గా అప్‌డేట్ అవుతుంది)")) return;
+    if (!confirm("ఈ Areaను తొలగించాలా?")) return;
     try {
       await api("/areas", { method: "PUT", body: JSON.stringify(data.areas.filter(a => a.id !== id)) });
       await reload();
@@ -425,7 +456,7 @@ function Areas({ data, reload }) {
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
         <h2 style={{ margin: 0 }}>📍 Cities & Operational Areas ({data.areas.length})</h2>
-        <button onClick={() => setOpen(true)} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Add New Area / City</button>
+        <button onClick={openNew} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Add New Area / City</button>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: "15px" }}>
@@ -433,13 +464,16 @@ function Areas({ data, reload }) {
           <div key={area.id} style={{ border: "1px solid #e2e8f0", padding: "15px", borderRadius: "8px" }}>
             <h3 style={{ margin: "0 0 5px" }}>{area.name}</h3>
             <p style={{ margin: "0 0 10px", color: "#64748b", fontSize: "13px" }}>{area.city} {area.state && `(${area.state})`}</p>
-            <button onClick={() => remove(area.id)} style={{ padding: "4px 8px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>Delete</button>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button onClick={() => openEdit(area)} style={{ padding: "4px 10px", background: "#e0f2fe", color: "#0369a1", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>✏️ Edit</button>
+              <button onClick={() => remove(area.id)} style={{ padding: "4px 10px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>🗑 Delete</button>
+            </div>
           </div>
         ))}
       </div>
 
       {open && (
-        <Modal title="Add Area / City" close={() => setOpen(false)}>
+        <Modal title={editId ? "Edit Area / City" : "Add Area / City"} close={() => setOpen(false)}>
           <Field label="Area Name" value={form.name} set={v => setForm({ ...form, name: v })} />
           <Field label="City" value={form.city} set={v => setForm({ ...form, city: v })} />
           <Field label="State" value={form.state} set={v => setForm({ ...form, state: v })} />
@@ -450,10 +484,12 @@ function Areas({ data, reload }) {
   );
 }
 
+/* ================= 2. SCREENS MODULE (ADD / EDIT / DELETE / SHORT URL) ================= */
 function Screens({ data, reload }) {
   const [pending, setPending] = useState([]);
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", areaId: "" });
+  const [editId, setEditId] = useState(null);
+  const [form, setForm] = useState({ name: "", areaId: "", shortCode: "" });
 
   async function loadPending() {
     try {
@@ -477,20 +513,39 @@ function Screens({ data, reload }) {
     await reload();
   }
 
-  async function createManualScreen() {
+  function openNew() {
+    setEditId(null);
+    setForm({ name: "", areaId: "", shortCode: String(data.screens.length + 1) });
+    setOpen(true);
+  }
+
+  function openEdit(sc) {
+    setEditId(sc.id);
+    setForm({ name: sc.name, areaId: sc.areaId || "", shortCode: sc.shortCode || "" });
+    setOpen(true);
+  }
+
+  async function saveScreen() {
     if (!form.name.trim()) return alert("TV Name ఇవ్వండి.");
-    const newScreen = {
-      id: `tv_${Date.now()}`,
-      name: form.name.trim(),
-      areaId: form.areaId,
-      status: "offline",
-      lastSeen: null,
-      playlistId: null,
-      createdAt: new Date().toISOString(),
-    };
+    let next;
+    if (editId) {
+      next = data.screens.map(s =>
+        s.id === editId ? { ...s, name: form.name.trim(), areaId: form.areaId, shortCode: form.shortCode.trim() || s.shortCode } : s
+      );
+    } else {
+      next = [...data.screens, {
+        id: `tv_${Date.now()}`,
+        shortCode: form.shortCode.trim() || String(data.screens.length + 1),
+        name: form.name.trim(),
+        areaId: form.areaId,
+        status: "offline",
+        lastSeen: null,
+        playlistId: null,
+        createdAt: new Date().toISOString(),
+      }];
+    }
     try {
-      await api("/screens", { method: "PUT", body: JSON.stringify([...data.screens, newScreen]) });
-      setForm({ name: "", areaId: "" });
+      await api("/screens", { method: "PUT", body: JSON.stringify(next) });
       setOpen(false);
       await reload();
     } catch (err) {
@@ -523,7 +578,7 @@ function Screens({ data, reload }) {
       <div style={{ marginBottom: "20px", padding: "15px", background: "#f8fafc", borderRadius: "8px", border: "1px dashed #cbd5e1" }}>
         <h3 style={{ margin: "0 0 8px" }}>🔗 Remote Android TV Pairing</h3>
         <p style={{ margin: "0 0 10px", fontSize: "13px", color: "#64748b" }}>
-          టీవీ బ్రౌజర్‌లో <b>{getServerOrigin()}/player</b> ఓపెన్ చేస్తే వచ్చే 6-digit Code ను ఇక్కడ చూడవచ్చు.
+          టీవీ బ్రౌజర్‌లో <b>{getServerOrigin()}/player</b> ఓపెన్ చేస్తే వచ్చే 6-digit Code ను ఇక్కడ చూడవచ్చు, లేదా క్రింద ఉన్న <b>Short Player Link</b> ను నేరుగా టీవీలో ఓపెన్ చేయవచ్చు.
         </p>
         {pending.length === 0 ? (
           <div style={{ fontSize: "13px", color: "#94a3b8" }}>No pending TV devices waiting to pair right now.</div>
@@ -542,50 +597,65 @@ function Screens({ data, reload }) {
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
         <h2 style={{ margin: 0 }}>📺 Connected TV Screens ({data.screens.length})</h2>
-        <button onClick={() => setOpen(true)} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Add TV Manually</button>
+        <button onClick={openNew} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Add TV Manually</button>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "15px" }}>
-        {data.screens.map(screen => (
-          <div key={screen.id} style={{ border: "1px solid #e2e8f0", padding: "15px", borderRadius: "8px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <h3 style={{ margin: 0 }}>{screen.name}</h3>
-              <span style={{ padding: "3px 8px", borderRadius: "4px", fontSize: "11px", fontWeight: "bold", background: screen.status === "online" ? "#dcfce7" : "#fee2e2", color: screen.status === "online" ? "#15803d" : "#b91c1c" }}>
-                {screen.status || "offline"}
-              </span>
-            </div>
-            <p style={{ margin: "5px 0 10px", color: "#64748b", fontSize: "13px" }}>Location: {data.areas.find(a => a.id === screen.areaId)?.name || "Remote"}</p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "15px" }}>
+        {data.screens.map((screen, idx) => {
+          const shortUrl = `${getServerOrigin()}/tv/${screen.shortCode || idx + 1}`;
+          return (
+            <div key={screen.id} style={{ border: "1px solid #e2e8f0", padding: "15px", borderRadius: "8px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <h3 style={{ margin: 0 }}>{screen.name}</h3>
+                <span style={{ padding: "3px 8px", borderRadius: "4px", fontSize: "11px", fontWeight: "bold", background: screen.status === "online" ? "#dcfce7" : "#fee2e2", color: screen.status === "online" ? "#15803d" : "#b91c1c" }}>
+                  {screen.status || "offline"}
+                </span>
+              </div>
+              <p style={{ margin: "5px 0", color: "#64748b", fontSize: "13px" }}>Location: {data.areas.find(a => a.id === screen.areaId)?.name || "Remote"}</p>
 
-            <div style={{ marginBottom: "10px" }}>
-              <label style={{ fontSize: "12px", color: "#475569", display: "block", marginBottom: "4px" }}>Select Playlist to Play:</label>
-              <select
-                value={screen.playlistId || ""}
-                onChange={e => assignPlaylist(screen.id, e.target.value)}
-                style={{ width: "100%", padding: "6px", borderRadius: "6px", border: "1px solid #cbd5e1" }}
-              >
-                <option value="">No Playlist Assigned</option>
-                {data.playlists.map(p => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </div>
+              <div style={{ background: "#f1f5f9", padding: "6px 8px", borderRadius: "6px", marginBottom: "10px", fontSize: "12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ color: "#1d4ed8", fontWeight: "600", overflow: "hidden", textOverflow: "ellipsis" }}>{shortUrl}</span>
+                <button
+                  onClick={() => { navigator.clipboard.writeText(shortUrl); alert("Short Player URL కాపీ అయింది!"); }}
+                  style={{ padding: "2px 6px", background: "#fff", border: "1px solid #cbd5e1", borderRadius: "4px", cursor: "pointer", fontSize: "11px" }}
+                >
+                  Copy
+                </button>
+              </div>
 
-            <div style={{ display: "flex", gap: "8px" }}>
-              <button
-                onClick={() => window.open(`${getServerOrigin()}/?player=${encodeURIComponent(screen.id)}`, "_blank", "noopener,noreferrer")}
-                style={{ flex: 1, padding: "6px", background: "#10b981", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}
-              >
-                ▶ Play TV
-              </button>
-              <button onClick={() => removeScreen(screen.id)} style={{ padding: "6px 12px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>Remove</button>
+              <div style={{ marginBottom: "10px" }}>
+                <label style={{ fontSize: "12px", color: "#475569", display: "block", marginBottom: "4px" }}>Select Playlist to Play:</label>
+                <select
+                  value={screen.playlistId || ""}
+                  onChange={e => assignPlaylist(screen.id, e.target.value)}
+                  style={{ width: "100%", padding: "6px", borderRadius: "6px", border: "1px solid #cbd5e1" }}
+                >
+                  <option value="">No Playlist Assigned</option>
+                  {data.playlists.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ display: "flex", gap: "6px" }}>
+                <button
+                  onClick={() => window.open(shortUrl, "_blank", "noopener,noreferrer")}
+                  style={{ flex: 1, padding: "6px", background: "#10b981", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}
+                >
+                  ▶ Play TV
+                </button>
+                <button onClick={() => openEdit(screen)} style={{ padding: "6px 10px", background: "#e0f2fe", color: "#0369a1", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>✏️ Edit</button>
+                <button onClick={() => removeScreen(screen.id)} style={{ padding: "6px 10px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>🗑</button>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {open && (
-        <Modal title="Add TV Screen Manually" close={() => setOpen(false)}>
+        <Modal title={editId ? "Edit TV Screen" : "Add TV Screen Manually"} close={() => setOpen(false)}>
           <Field label="TV Name" value={form.name} set={v => setForm({ ...form, name: v })} />
+          <Field label="Short TV Code / Number (e.g. 1, 2, hyd1)" value={form.shortCode} set={v => setForm({ ...form, shortCode: v })} />
           <div style={{ marginBottom: "15px" }}>
             <label style={{ display: "block", fontSize: "13px", fontWeight: "600", marginBottom: "6px" }}>City / Area</label>
             <select value={form.areaId} onChange={e => setForm({ ...form, areaId: e.target.value })} style={{ width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e1" }}>
@@ -593,35 +663,71 @@ function Screens({ data, reload }) {
               {data.areas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           </div>
-          <button className="btn" onClick={createManualScreen} style={{ width: "100%", padding: "10px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px" }}>Save TV</button>
+          <button className="btn" onClick={saveScreen} style={{ width: "100%", padding: "10px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px" }}>Save TV</button>
         </Modal>
       )}
     </div>
   );
 }
 
+/* ================= 3. ADS MODULE (UPLOAD / EDIT DURATION / REPLACE FILE / DELETE) ================= */
 function Ads({ data, reload }) {
   const [open, setOpen] = useState(false);
+  const [editAd, setEditAd] = useState(null);
   const [form, setForm] = useState({ name: "", duration: 10, file: null });
   const [busy, setBusy] = useState(false);
 
+  function openNew() {
+    setEditAd(null);
+    setForm({ name: "", duration: 10, file: null });
+    setOpen(true);
+  }
+
+  function openEditModal(ad) {
+    setEditAd(ad);
+    setForm({ name: ad.name, duration: ad.duration || 10, file: null });
+    setOpen(true);
+  }
+
   async function saveAdvertisement() {
     if (!form.name.trim()) return alert("Ad Name ఇవ్వండి.");
-    if (!form.file) return alert("File ఎంపిక చేయండి.");
+    if (!editAd && !form.file) return alert("File ఎంపిక చేయండి.");
     setBusy(true);
     try {
-      const formData = new FormData();
-      formData.append("file", form.file);
-      const uploaded = await api("/upload", { method: "POST", body: formData });
-      const advertisement = {
-        id: `ad_${Date.now()}`,
-        name: form.name.trim(),
-        duration: Number(form.duration) || 10,
-        ...uploaded,
-        createdAt: new Date().toISOString(),
-      };
-      await api("/ads", { method: "PUT", body: JSON.stringify([...data.ads, advertisement]) });
+      let uploadedData = {};
+      if (form.file) {
+        const formData = new FormData();
+        formData.append("file", form.file);
+        uploadedData = await api("/upload", { method: "POST", body: formData });
+      }
+
+      let next;
+      if (editAd) {
+        next = data.ads.map(item =>
+          item.id === editAd.id
+            ? {
+                ...item,
+                name: form.name.trim(),
+                duration: Number(form.duration) || 10,
+                ...uploadedData,
+                updatedAt: new Date().toISOString(),
+              }
+            : item
+        );
+      } else {
+        const advertisement = {
+          id: `ad_${Date.now()}`,
+          name: form.name.trim(),
+          duration: Number(form.duration) || 10,
+          ...uploadedData,
+          createdAt: new Date().toISOString(),
+        };
+        next = [...data.ads, advertisement];
+      }
+
+      await api("/ads", { method: "PUT", body: JSON.stringify(next) });
       setForm({ name: "", duration: 10, file: null });
+      setEditAd(null);
       setOpen(false);
       await reload();
     } catch (err) {
@@ -632,10 +738,10 @@ function Ads({ data, reload }) {
   }
 
   async function deleteAdvertisement(ad) {
-    if (!confirm("ఈ advertisement ను తొలగించాలా? (ఇది అన్ని Playlists నుండి కూడా ఆటోమేటిక్‌గా తొలగిపోతుంది)")) return;
+    if (!confirm(`"${ad.name}" యాడ్‌ను శాశ్వతంగా డిలీట్ చేయాలా? (ఇది అన్ని Playlists నుండి కూడా తొలగిపోతుంది)`)) return;
     try {
       await api("/ads", { method: "PUT", body: JSON.stringify(data.ads.filter(item => item.id !== ad.id)) });
-      if (ad.fileKey && !ad.permanent) {
+      if (ad.fileKey && !ad.permanent && !ad.isSocial) {
         try { await api(`/upload/${encodeURIComponent(ad.fileKey)}`, { method: "DELETE" }); } catch {}
       }
       await reload();
@@ -648,40 +754,60 @@ function Ads({ data, reload }) {
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
         <h2 style={{ margin: 0 }}>🎞 Advertisements Media Library ({data.ads.length})</h2>
-        <button onClick={() => setOpen(true)} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Upload Video / Banner</button>
+        <button onClick={openNew} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Upload Video / Banner</button>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "15px" }}>
         {data.ads.map(ad => (
           <div key={ad.id} style={{ border: "1px solid #e2e8f0", padding: "12px", borderRadius: "8px" }}>
             <h3 style={{ margin: "0 0 8px", fontSize: "15px" }}>{ad.name}</h3>
-            <div style={{ width: "100%", height: "140px", background: "#000", borderRadius: "6px", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              {ad.fileType?.startsWith("video/") ? (
+            <div style={{ width: "100%", height: "140px", background: "#000", borderRadius: "6px", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: "12px" }}>
+              {ad.isSocial ? (
+                <div style={{ textAlign: "center", padding: "10px" }}>
+                  <div style={{ fontSize: "24px" }}>📱</div>
+                  <div>{ad.platform || "Social Media"} Live/Video</div>
+                </div>
+              ) : ad.fileType?.startsWith("video/") ? (
                 <video src={mediaUrl(ad.fileUrl)} style={{ maxWidth: "100%", maxHeight: "100%" }} controls preload="metadata" />
               ) : (
                 <img src={mediaUrl(ad.fileUrl)} alt={ad.name} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
               )}
             </div>
             <div style={{ fontSize: "12px", color: "#64748b", marginTop: "8px" }}>
-              Duration: {ad.duration || 10}s • {ad.permanent ? "☁️ Cloud Saved" : "Local"}
+              Duration: <b>{ad.duration || 10}s</b> • {ad.isSocial ? ad.platform : ad.permanent ? "☁️ Cloud" : "Local"}
             </div>
-            <button onClick={() => deleteAdvertisement(ad)} style={{ marginTop: "10px", padding: "4px 8px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px", width: "100%" }}>
-              Delete Ad
-            </button>
+            <div style={{ display: "flex", gap: "6px", marginTop: "10px" }}>
+              <button
+                onClick={() => openEditModal(ad)}
+                style={{ flex: 1, padding: "6px 8px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}
+              >
+                ✏️ Edit / Replace
+              </button>
+              <button
+                onClick={() => deleteAdvertisement(ad)}
+                style={{ padding: "6px 10px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}
+              >
+                🗑 Delete
+              </button>
+            </div>
           </div>
         ))}
       </div>
 
       {open && (
-        <Modal title="Upload Advertisement" close={() => !busy && setOpen(false)}>
+        <Modal title={editAd ? "Edit Ad / Duration / Replace Media" : "Upload Advertisement"} close={() => !busy && setOpen(false)}>
           <Field label="Ad / Client Title" value={form.name} set={v => setForm({ ...form, name: v })} />
-          <Field label="Image Duration (seconds)" type="number" value={form.duration} set={v => setForm({ ...form, duration: v })} />
-          <div style={{ marginBottom: "15px" }}>
-            <label style={{ display: "block", fontSize: "13px", fontWeight: "600", marginBottom: "6px" }}>Select Video (MP4) or Image (PNG/JPG)</label>
-            <input type="file" accept="video/mp4,video/webm,image/jpeg,image/png,image/webp" onChange={e => setForm({ ...form, file: e.target.files?.[0] || null })} />
-          </div>
-          <button className="btn" disabled={busy} onClick={saveAdvertisement} style={{ width: "100%", padding: "10px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px" }}>
-            {busy ? "Uploading..." : "Upload & Save to Cloud"}
+          <Field label="Display Duration (seconds)" type="number" value={form.duration} set={v => setForm({ ...form, duration: v })} />
+          {!editAd?.isSocial && (
+            <div style={{ marginBottom: "15px" }}>
+              <label style={{ display: "block", fontSize: "13px", fontWeight: "600", marginBottom: "6px" }}>
+                {editAd ? "Replace Video / Image (Optional - మార్చాలనుకుంటేనే ఎంచుకోండి)" : "Select Video (MP4) or Image (PNG/JPG)"}
+              </label>
+              <input type="file" accept="video/mp4,video/webm,image/jpeg,image/png,image/webp" onChange={e => setForm({ ...form, file: e.target.files?.[0] || null })} />
+            </div>
+          )}
+          <button className="btn" disabled={busy} onClick={saveAdvertisement} style={{ width: "100%", padding: "10px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", fontWeight: "bold" }}>
+            {busy ? "Saving..." : editAd ? "Save Changes" : "Upload & Save"}
           </button>
         </Modal>
       )}
@@ -689,6 +815,7 @@ function Ads({ data, reload }) {
   );
 }
 
+/* ================= 4. PLAYLISTS MODULE (EDIT / UNLIMITED ADS / INLINE DURATION & DELETE) ================= */
 function Playlists({ data, reload }) {
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -714,6 +841,21 @@ function Playlists({ data, reload }) {
       adIds: Array.isArray(pl.adIds) ? [...pl.adIds] : [],
     });
     setOpen(true);
+  }
+
+  async function quickUpdateDuration(ad) {
+    const val = prompt(`"${ad.name}" ఎన్ని సెకన్లు ప్లే అవ్వాలి?`, String(ad.duration || 10));
+    if (!val || isNaN(Number(val))) return;
+    const nextAds = data.ads.map(item => item.id === ad.id ? { ...item, duration: Number(val) } : item);
+    await api("/ads", { method: "PUT", body: JSON.stringify(nextAds) });
+    await reload();
+  }
+
+  async function quickDeleteAd(ad) {
+    if (!confirm(`"${ad.name}" యాడ్‌ను పూర్తిగా డిలీట్ చేయాలా?`)) return;
+    await api("/ads", { method: "PUT", body: JSON.stringify(data.ads.filter(item => item.id !== ad.id)) });
+    setForm(curr => ({ ...curr, adIds: curr.adIds.filter(id => id !== ad.id) }));
+    await reload();
   }
 
   async function savePlaylist() {
@@ -770,11 +912,15 @@ function Playlists({ data, reload }) {
             <h3 style={{ margin: "0 0 5px" }}>{pl.name}</h3>
             <p style={{ margin: "0 0 10px", fontSize: "13px", color: "#64748b" }}>{pl.adIds.length} Advertisements in Loop</p>
             <div style={{ fontSize: "12px", background: "#f8fafc", padding: "8px", borderRadius: "4px", marginBottom: "10px", maxHeight: "140px", overflowY: "auto" }}>
-              {pl.adIds.map((aid, idx) => (
-                <div key={`${aid}_${idx}`} style={{ padding: "2px 0" }}>
-                  {idx + 1}. {data.ads.find(a => a.id === aid)?.name || "Ad"}
-                </div>
-              ))}
+              {pl.adIds.map((aid, idx) => {
+                const found = data.ads.find(a => a.id === aid);
+                return (
+                  <div key={`${aid}_${idx}`} style={{ padding: "2px 0", display: "flex", justifyContent: "space-between" }}>
+                    <span>{idx + 1}. {found?.name || "Ad"}</span>
+                    <span style={{ color: "#64748b" }}>{found?.duration || 10}s</span>
+                  </div>
+                );
+              })}
             </div>
             <div style={{ display: "flex", gap: "8px" }}>
               <button
@@ -796,7 +942,7 @@ function Playlists({ data, reload }) {
 
       {open && (
         <Modal
-          title={editingId ? "Edit Playlist & Add More Ads" : "Create New Playlist"}
+          title={editingId ? "Edit Playlist & Manage Ads" : "Create New Playlist"}
           close={() => { setOpen(false); setEditingId(null); }}
         >
           <Field label="Playlist Name" value={form.name} set={v => setForm({ ...form, name: v })} />
@@ -822,17 +968,32 @@ function Playlists({ data, reload }) {
             {data.ads.length === 0 ? (
               <p style={{ fontSize: "13px", color: "#b91c1c" }}>ముందుగా 'Advertisements' లో కొన్ని Ads అప్‌లోడ్ చేయండి.</p>
             ) : (
-              <div style={{ maxHeight: "240px", overflowY: "auto", border: "1px solid #cbd5e1", borderRadius: "6px", padding: "8px" }}>
+              <div style={{ maxHeight: "260px", overflowY: "auto", border: "1px solid #cbd5e1", borderRadius: "6px", padding: "8px" }}>
                 {data.ads.map(ad => (
-                  <label key={ad.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 4px", borderBottom: "1px solid #f1f5f9", fontSize: "13px", cursor: "pointer" }}>
+                  <div key={ad.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 4px", borderBottom: "1px solid #f1f5f9", fontSize: "13px" }}>
                     <input
                       type="checkbox"
                       checked={form.adIds.includes(ad.id)}
                       onChange={e => toggleAd(ad.id, e.target.checked)}
                     />
-                    <span>{ad.name}</span>
-                    <span style={{ marginLeft: "auto", fontSize: "11px", color: "#64748b" }}>{ad.duration || 10}s</span>
-                  </label>
+                    <span style={{ flex: 1 }}>{ad.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => quickUpdateDuration(ad)}
+                      title="Edit Duration"
+                      style={{ fontSize: "11px", padding: "2px 6px", background: "#f1f5f9", border: "1px solid #cbd5e1", borderRadius: "4px", cursor: "pointer" }}
+                    >
+                      ⏱ {ad.duration || 10}s
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => quickDeleteAd(ad)}
+                      title="Delete Ad Permanently"
+                      style={{ fontSize: "11px", padding: "2px 6px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer" }}
+                    >
+                      🗑
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -846,8 +1007,10 @@ function Playlists({ data, reload }) {
   );
 }
 
+/* ================= 5. SCHEDULES MODULE (IST TIME / ADD / EDIT / DELETE) ================= */
 function Schedules({ data, reload }) {
   const [open, setOpen] = useState(false);
+  const [editId, setEditId] = useState(null);
   const [form, setForm] = useState({ name: "", screenId: "", playlistId: "", start: "09:00", end: "21:00" });
 
   function toMinutes(time) {
@@ -855,20 +1018,47 @@ function Schedules({ data, reload }) {
     return h * 60 + m;
   }
 
+  function openNew() {
+    setEditId(null);
+    setForm({ name: "", screenId: "", playlistId: "", start: "09:00", end: "21:00" });
+    setOpen(true);
+  }
+
+  function openEdit(sc) {
+    setEditId(sc.id);
+    setForm({
+      name: sc.name,
+      screenId: sc.screenId,
+      playlistId: sc.playlistId,
+      start: formatMinutes(sc.start),
+      end: formatMinutes(sc.end),
+    });
+    setOpen(true);
+  }
+
   async function saveSchedule() {
     if (!form.name.trim() || !form.screenId || !form.playlistId) return alert("దయచేసి అన్ని వివరాలు పూరించండి.");
-    const schedule = {
-      id: `sc_${Date.now()}`,
-      name: form.name.trim(),
-      screenId: form.screenId,
-      playlistId: form.playlistId,
-      start: toMinutes(form.start),
-      end: toMinutes(form.end),
-      days: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
-      active: true,
-    };
+    let next;
+    if (editId) {
+      next = data.schedules.map(sc =>
+        sc.id === editId
+          ? { ...sc, name: form.name.trim(), screenId: form.screenId, playlistId: form.playlistId, start: toMinutes(form.start), end: toMinutes(form.end) }
+          : sc
+      );
+    } else {
+      next = [...data.schedules, {
+        id: `sc_${Date.now()}`,
+        name: form.name.trim(),
+        screenId: form.screenId,
+        playlistId: form.playlistId,
+        start: toMinutes(form.start),
+        end: toMinutes(form.end),
+        days: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+        active: true,
+      }];
+    }
     try {
-      await api("/schedules", { method: "PUT", body: JSON.stringify([...data.schedules, schedule]) });
+      await api("/schedules", { method: "PUT", body: JSON.stringify(next) });
       setOpen(false);
       await reload();
     } catch (err) {
@@ -889,8 +1079,11 @@ function Schedules({ data, reload }) {
   return (
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
-        <h2 style={{ margin: 0 }}>🕒 Automated Time Schedules ({data.schedules.length})</h2>
-        <button onClick={() => setOpen(true)} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Add Schedule</button>
+        <div>
+          <h2 style={{ margin: 0 }}>🕒 Automated Time Schedules ({data.schedules.length})</h2>
+          <small style={{ color: "#16a34a" }}>Indian Standard Time (IST) Active</small>
+        </div>
+        <button onClick={openNew} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Add Schedule</button>
       </div>
 
       <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "14px" }}>
@@ -899,7 +1092,7 @@ function Schedules({ data, reload }) {
             <th style={{ padding: "10px" }}>Schedule Name</th>
             <th style={{ padding: "10px" }}>Target TV</th>
             <th style={{ padding: "10px" }}>Playlist</th>
-            <th style={{ padding: "10px" }}>Active Hours</th>
+            <th style={{ padding: "10px" }}>Active Hours (IST)</th>
             <th style={{ padding: "10px" }}>Action</th>
           </tr>
         </thead>
@@ -910,8 +1103,9 @@ function Schedules({ data, reload }) {
               <td style={{ padding: "10px" }}>{data.screens.find(s => s.id === sc.screenId)?.name || "TV"}</td>
               <td style={{ padding: "10px" }}>{data.playlists.find(p => p.id === sc.playlistId)?.name || "Playlist"}</td>
               <td style={{ padding: "10px" }}>{formatMinutes(sc.start)} - {formatMinutes(sc.end)}</td>
-              <td style={{ padding: "10px" }}>
-                <button onClick={() => removeSchedule(sc.id)} style={{ padding: "4px 8px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>Delete</button>
+              <td style={{ padding: "10px", display: "flex", gap: "6px" }}>
+                <button onClick={() => openEdit(sc)} style={{ padding: "4px 8px", background: "#e0f2fe", color: "#0369a1", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>✏️ Edit</button>
+                <button onClick={() => removeSchedule(sc.id)} style={{ padding: "4px 8px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>🗑 Delete</button>
               </td>
             </tr>
           ))}
@@ -919,7 +1113,7 @@ function Schedules({ data, reload }) {
       </table>
 
       {open && (
-        <Modal title="Add Broadcast Schedule" close={() => setOpen(false)}>
+        <Modal title={editId ? "Edit Broadcast Schedule" : "Add Broadcast Schedule"} close={() => setOpen(false)}>
           <Field label="Schedule Name" value={form.name} set={v => setForm({ ...form, name: v })} />
           <div style={{ marginBottom: "15px" }}>
             <label style={{ display: "block", fontSize: "13px", fontWeight: "600", marginBottom: "6px" }}>Select TV</label>
@@ -937,11 +1131,11 @@ function Schedules({ data, reload }) {
           </div>
           <div style={{ display: "flex", gap: "10px", marginBottom: "15px" }}>
             <div style={{ flex: 1 }}>
-              <label style={{ fontSize: "13px" }}>Start Time</label>
+              <label style={{ fontSize: "13px" }}>Start Time (IST)</label>
               <input type="time" value={form.start} onChange={e => setForm({ ...form, start: e.target.value })} style={{ width: "100%", padding: "8px" }} />
             </div>
             <div style={{ flex: 1 }}>
-              <label style={{ fontSize: "13px" }}>End Time</label>
+              <label style={{ fontSize: "13px" }}>End Time (IST)</label>
               <input type="time" value={form.end} onChange={e => setForm({ ...form, end: e.target.value })} style={{ width: "100%", padding: "8px" }} />
             </div>
           </div>
@@ -952,50 +1146,66 @@ function Schedules({ data, reload }) {
   );
 }
 
+/* ================= 6. LIVE CENTER MODULE ================= */
 function LiveCenter({ data }) {
   return (
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
       <h2 style={{ margin: "0 0 10px" }}>🔴 Live TV Broadcast Center</h2>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "15px" }}>
-        {data.screens.map(screen => (
-          <div key={screen.id} style={{ border: "2px solid #e2e8f0", padding: "15px", borderRadius: "10px", background: screen.status === "online" ? "#f0fdf4" : "#fff" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <h3 style={{ margin: 0 }}>{screen.name}</h3>
-              <span style={{ fontSize: "12px", color: screen.status === "online" ? "#15803d" : "#991b1b", fontWeight: "bold" }}>
-                {screen.status === "online" ? "● LIVE STREAMING" : "○ OFFLINE"}
-              </span>
+        {data.screens.map((screen, idx) => {
+          const shortUrl = `${getServerOrigin()}/tv/${screen.shortCode || idx + 1}`;
+          return (
+            <div key={screen.id} style={{ border: "2px solid #e2e8f0", padding: "15px", borderRadius: "10px", background: screen.status === "online" ? "#f0fdf4" : "#fff" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <h3 style={{ margin: 0 }}>{screen.name}</h3>
+                <span style={{ fontSize: "12px", color: screen.status === "online" ? "#15803d" : "#991b1b", fontWeight: "bold" }}>
+                  {screen.status === "online" ? "● LIVE STREAMING" : "○ OFFLINE"}
+                </span>
+              </div>
+              <p style={{ fontSize: "12px", color: "#64748b", margin: "6px 0" }}>Last Heartbeat: {screen.lastSeen ? new Date(screen.lastSeen).toLocaleTimeString() : "Never"}</p>
+              <button
+                onClick={() => window.open(shortUrl, "_blank")}
+                style={{ width: "100%", padding: "8px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "13px", marginTop: "8px" }}
+              >
+                🖥 Remote Screen Monitor
+              </button>
             </div>
-            <p style={{ fontSize: "12px", color: "#64748b", margin: "6px 0" }}>Last Heartbeat: {screen.lastSeen ? new Date(screen.lastSeen).toLocaleTimeString() : "Never"}</p>
-            <button
-              onClick={() => window.open(`${getServerOrigin()}/?player=${encodeURIComponent(screen.id)}`, "_blank")}
-              style={{ width: "100%", padding: "8px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "13px", marginTop: "8px" }}
-            >
-              🖥 Remote Screen Monitor
-            </button>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function Franchise({ data, setData }) {
+/* ================= 7. FRANCHISE MODULE (ADD / EDIT / DELETE) ================= */
+function Franchise({ data, reload }) {
   const [open, setOpen] = useState(false);
+  const [editId, setEditId] = useState(null);
   const [form, setForm] = useState({ name: "", city: "", phone: "", commission: "20%" });
+
+  function openNew() { setEditId(null); setForm({ name: "", city: "", phone: "", commission: "20%" }); setOpen(true); }
+  function openEdit(fr) { setEditId(fr.id); setForm({ name: fr.name, city: fr.city, phone: fr.phone, commission: fr.commission }); setOpen(true); }
 
   async function saveFranchise() {
     if (!form.name.trim()) return alert("Franchise Partner Name ఇవ్వండి.");
-    const next = [...(data.franchises || []), { id: `fr_${Date.now()}`, ...form }];
+    const list = data.franchises || [];
+    const next = editId ? list.map(f => f.id === editId ? { ...f, ...form } : f) : [...list, { id: `fr_${Date.now()}`, ...form }];
     await api("/franchises", { method: "PUT", body: JSON.stringify(next) });
-    setData({ ...data, franchises: next });
     setOpen(false);
+    await reload();
+  }
+
+  async function removeFranchise(id) {
+    if (!confirm("ఈ Franchise Partner ను తొలగించాలా?")) return;
+    await api("/franchises", { method: "PUT", body: JSON.stringify((data.franchises || []).filter(f => f.id !== id)) });
+    await reload();
   }
 
   return (
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
         <h2 style={{ margin: 0 }}>🏢 Franchise Partners Management</h2>
-        <button onClick={() => setOpen(true)} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Add Franchise Partner</button>
+        <button onClick={openNew} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Add Franchise Partner</button>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "15px" }}>
         {(data.franchises || []).map(fr => (
@@ -1003,11 +1213,15 @@ function Franchise({ data, setData }) {
             <h3 style={{ margin: "0 0 5px" }}>{fr.name}</h3>
             <p style={{ margin: "0 0 5px", fontSize: "13px", color: "#64748b" }}>City: {fr.city} • {fr.phone}</p>
             <span style={{ fontSize: "12px", background: "#e0f2fe", color: "#0369a1", padding: "3px 8px", borderRadius: "4px" }}>Revenue Share: {fr.commission}</span>
+            <div style={{ display: "flex", gap: "6px", marginTop: "10px" }}>
+              <button onClick={() => openEdit(fr)} style={{ padding: "4px 8px", background: "#e0f2fe", color: "#0369a1", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>✏️ Edit</button>
+              <button onClick={() => removeFranchise(fr.id)} style={{ padding: "4px 8px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>🗑 Delete</button>
+            </div>
           </div>
         ))}
       </div>
       {open && (
-        <Modal title="Add City Franchise Partner" close={() => setOpen(false)}>
+        <Modal title={editId ? "Edit Franchise Partner" : "Add City Franchise Partner"} close={() => setOpen(false)}>
           <Field label="Partner Name" value={form.name} set={v => setForm({ ...form, name: v })} />
           <Field label="Operational City" value={form.city} set={v => setForm({ ...form, city: v })} />
           <Field label="Phone Number" value={form.phone} set={v => setForm({ ...form, phone: v })} />
@@ -1019,23 +1233,35 @@ function Franchise({ data, setData }) {
   );
 }
 
-function CRM({ data, setData }) {
+/* ================= 8. CRM MODULE (ADD / EDIT / DELETE) ================= */
+function CRM({ data, reload }) {
   const [open, setOpen] = useState(false);
+  const [editId, setEditId] = useState(null);
   const [form, setForm] = useState({ name: "", business: "", phone: "", budget: "" });
+
+  function openNew() { setEditId(null); setForm({ name: "", business: "", phone: "", budget: "" }); setOpen(true); }
+  function openEdit(cl) { setEditId(cl.id); setForm({ name: cl.name, business: cl.business, phone: cl.phone, budget: cl.budget }); setOpen(true); }
 
   async function saveClient() {
     if (!form.name.trim()) return alert("Client Name ఇవ్వండి.");
-    const next = [...(data.clients || []), { id: `cl_${Date.now()}`, ...form }];
+    const list = data.clients || [];
+    const next = editId ? list.map(c => c.id === editId ? { ...c, ...form } : c) : [...list, { id: `cl_${Date.now()}`, ...form }];
     await api("/clients", { method: "PUT", body: JSON.stringify(next) });
-    setData({ ...data, clients: next });
     setOpen(false);
+    await reload();
+  }
+
+  async function removeClient(id) {
+    if (!confirm("ఈ Client ను తొలగించాలా?")) return;
+    await api("/clients", { method: "PUT", body: JSON.stringify((data.clients || []).filter(c => c.id !== id)) });
+    await reload();
   }
 
   return (
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
         <h2 style={{ margin: 0 }}>👥 Advertisers & Clients (CRM)</h2>
-        <button onClick={() => setOpen(true)} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Add Advertiser</button>
+        <button onClick={openNew} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Add Advertiser</button>
       </div>
       <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "14px" }}>
         <thead>
@@ -1044,6 +1270,7 @@ function CRM({ data, setData }) {
             <th style={{ padding: "10px" }}>Business</th>
             <th style={{ padding: "10px" }}>Phone</th>
             <th style={{ padding: "10px" }}>Budget</th>
+            <th style={{ padding: "10px" }}>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -1053,12 +1280,16 @@ function CRM({ data, setData }) {
               <td style={{ padding: "10px" }}>{cl.business}</td>
               <td style={{ padding: "10px" }}>{cl.phone}</td>
               <td style={{ padding: "10px", color: "#16a34a", fontWeight: "bold" }}>₹{cl.budget}</td>
+              <td style={{ padding: "10px", display: "flex", gap: "6px" }}>
+                <button onClick={() => openEdit(cl)} style={{ padding: "4px 8px", background: "#e0f2fe", color: "#0369a1", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>✏️ Edit</button>
+                <button onClick={() => removeClient(cl.id)} style={{ padding: "4px 8px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>🗑 Delete</button>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
       {open && (
-        <Modal title="Add New Advertiser Client" close={() => setOpen(false)}>
+        <Modal title={editId ? "Edit Client" : "Add New Advertiser Client"} close={() => setOpen(false)}>
           <Field label="Client Name" value={form.name} set={v => setForm({ ...form, name: v })} />
           <Field label="Shop / Business Name" value={form.business} set={v => setForm({ ...form, business: v })} />
           <Field label="Phone Number" value={form.phone} set={v => setForm({ ...form, phone: v })} />
@@ -1070,23 +1301,35 @@ function CRM({ data, setData }) {
   );
 }
 
-function Billing({ data, setData }) {
+/* ================= 9. BILLING MODULE (ADD / EDIT / DELETE) ================= */
+function Billing({ data, reload }) {
   const [open, setOpen] = useState(false);
+  const [editId, setEditId] = useState(null);
   const [form, setForm] = useState({ client: "", amount: "", status: "Paid", date: new Date().toISOString().split("T")[0] });
+
+  function openNew() { setEditId(null); setForm({ client: "", amount: "", status: "Paid", date: new Date().toISOString().split("T")[0] }); setOpen(true); }
+  function openEdit(inv) { setEditId(inv.id); setForm({ client: inv.client, amount: inv.amount, status: inv.status, date: inv.date }); setOpen(true); }
 
   async function saveInvoice() {
     if (!form.client.trim()) return alert("Client Name ఇవ్వండి.");
-    const next = [...(data.billings || []), { id: `inv_${Date.now()}`, ...form }];
+    const list = data.billings || [];
+    const next = editId ? list.map(b => b.id === editId ? { ...b, ...form } : b) : [...list, { id: `inv_${Date.now()}`, ...form }];
     await api("/billings", { method: "PUT", body: JSON.stringify(next) });
-    setData({ ...data, billings: next });
     setOpen(false);
+    await reload();
+  }
+
+  async function removeInvoice(id) {
+    if (!confirm("ఈ Invoice ను తొలగించాలా?")) return;
+    await api("/billings", { method: "PUT", body: JSON.stringify((data.billings || []).filter(b => b.id !== id)) });
+    await reload();
   }
 
   return (
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
         <h2 style={{ margin: 0 }}>💰 Invoices & Billing Management</h2>
-        <button onClick={() => setOpen(true)} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Generate Invoice</button>
+        <button onClick={openNew} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Generate Invoice</button>
       </div>
       <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "14px" }}>
         <thead>
@@ -1095,6 +1338,7 @@ function Billing({ data, setData }) {
             <th style={{ padding: "10px" }}>Amount</th>
             <th style={{ padding: "10px" }}>Date</th>
             <th style={{ padding: "10px" }}>Status</th>
+            <th style={{ padding: "10px" }}>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -1104,15 +1348,26 @@ function Billing({ data, setData }) {
               <td style={{ padding: "10px", fontWeight: "bold" }}>₹{inv.amount}</td>
               <td style={{ padding: "10px" }}>{inv.date}</td>
               <td style={{ padding: "10px" }}>{inv.status}</td>
+              <td style={{ padding: "10px", display: "flex", gap: "6px" }}>
+                <button onClick={() => openEdit(inv)} style={{ padding: "4px 8px", background: "#e0f2fe", color: "#0369a1", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>✏️ Edit</button>
+                <button onClick={() => removeInvoice(inv.id)} style={{ padding: "4px 8px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>🗑 Delete</button>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
       {open && (
-        <Modal title="Create Invoicing Entry" close={() => setOpen(false)}>
+        <Modal title={editId ? "Edit Invoice" : "Create Invoicing Entry"} close={() => setOpen(false)}>
           <Field label="Advertiser Name" value={form.client} set={v => setForm({ ...form, client: v })} />
           <Field label="Invoice Amount (₹)" type="number" value={form.amount} set={v => setForm({ ...form, amount: v })} />
           <Field label="Date" type="date" value={form.date} set={v => setForm({ ...form, date: v })} />
+          <div style={{ marginBottom: "15px" }}>
+            <label style={{ display: "block", fontSize: "13px", marginBottom: "6px" }}>Status</label>
+            <select value={form.status} onChange={e => setForm({ ...form, status: e.target.value })} style={{ width: "100%", padding: "8px", borderRadius: "6px" }}>
+              <option value="Paid">Paid</option>
+              <option value="Pending">Pending</option>
+            </select>
+          </div>
           <button className="btn" onClick={saveInvoice} style={{ width: "100%", padding: "10px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px" }}>Save Invoice</button>
         </Modal>
       )}
@@ -1120,26 +1375,35 @@ function Billing({ data, setData }) {
   );
 }
 
-function FlashNews({ data, setData }) {
+/* ================= 10. NEWS & FLASH TICKERS (SCROLLS ON TOP OF VIDEO/PHOTO IN TV PLAYER) ================= */
+function FlashNews({ data, reload }) {
   const [text, setText] = useState("");
+  const [editId, setEditId] = useState(null);
 
-  async function addTicker() {
+  async function saveTicker() {
     if (!text.trim()) return;
-    const next = [...(data.tickers || []), { id: `tk_${Date.now()}`, text: text.trim(), active: true }];
+    const list = data.tickers || [];
+    const next = editId
+      ? list.map(t => t.id === editId ? { ...t, text: text.trim() } : t)
+      : [...list, { id: `tk_${Date.now()}`, text: text.trim(), active: true }];
     await api("/tickers", { method: "PUT", body: JSON.stringify(next) });
-    setData({ ...data, tickers: next });
     setText("");
+    setEditId(null);
+    await reload();
   }
 
   async function removeTicker(id) {
     const next = (data.tickers || []).filter(t => t.id !== id);
     await api("/tickers", { method: "PUT", body: JSON.stringify(next) });
-    setData({ ...data, tickers: next });
+    await reload();
   }
 
   return (
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
-      <h2 style={{ margin: "0 0 10px" }}>📰 Flash News & Bottom Screen Tickers</h2>
+      <h2 style={{ margin: "0 0 6px" }}>📰 Flash News & Bottom Screen Tickers</h2>
+      <p style={{ color: "#16a34a", fontSize: "13px", marginBottom: "15px" }}>
+        ఇక్కడ యాడ్ చేసిన స్క్రోలింగ్ వార్తలు అన్ని టీవీ స్క్రీన్లపై వీడియో మరియు ఫోటో యాడ్స్ క్రింద లైవ్‌లో స్క్రోల్ అవుతాయి.
+      </p>
       <div style={{ display: "flex", gap: "10px", marginBottom: "20px" }}>
         <input
           type="text"
@@ -1148,13 +1412,18 @@ function FlashNews({ data, setData }) {
           placeholder="ఉదాహరణ: 50% స్పెషల్ డిస్కౌంట్ ఆఫర్ అందుబాటులో ఉంది..."
           style={{ flex: 1, padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e1" }}
         />
-        <button onClick={addTicker} style={{ padding: "10px 20px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Add Scroll Ticker</button>
+        <button onClick={saveTicker} style={{ padding: "10px 20px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>
+          {editId ? "Update Ticker" : "+ Add Scroll Ticker"}
+        </button>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
         {(data.tickers || []).map(tk => (
           <div key={tk.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px", background: "#f8fafc", borderRadius: "8px", borderLeft: "4px solid #ef4444" }}>
             <span>📢 {tk.text}</span>
-            <button onClick={() => removeTicker(tk.id)} style={{ padding: "4px 8px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer" }}>Delete</button>
+            <div style={{ display: "flex", gap: "6px" }}>
+              <button onClick={() => { setEditId(tk.id); setText(tk.text); }} style={{ padding: "4px 8px", background: "#e0f2fe", color: "#0369a1", border: "none", borderRadius: "4px", cursor: "pointer" }}>✏️ Edit</button>
+              <button onClick={() => removeTicker(tk.id)} style={{ padding: "4px 8px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer" }}>🗑 Delete</button>
+            </div>
           </div>
         ))}
       </div>
@@ -1162,24 +1431,150 @@ function FlashNews({ data, setData }) {
   );
 }
 
-function SocialMedia() {
+/* ================= 11. SOCIAL MEDIA & LIVE LINKS INTEGRATION ================= */
+function SocialMedia({ data, reload }) {
+  const [form, setForm] = useState({ title: "", platform: "YouTube", url: "", duration: 30, targetScreenId: "" });
+
+  const platforms = [
+    "YouTube / YouTube Live",
+    "Facebook Video / Live",
+    "Instagram Reels / Video",
+    "X (Twitter) Video",
+    "Vimeo",
+    "Dailymotion",
+    "Direct MP4 / HLS Live Stream (.m3u8)"
+  ];
+
+  async function addSocialAd() {
+    if (!form.title.trim() || !form.url.trim()) return alert("Title మరియు Social Media Video URL ఇవ్వండి.");
+
+    // Create as an Ad in Ads Library so it can be added to any playlist & tracked in reports
+    const newAd = {
+      id: `ad_soc_${Date.now()}`,
+      name: `[${form.platform.split(" ")[0]}] ${form.title.trim()}`,
+      duration: Number(form.duration) || 30,
+      fileUrl: form.url.trim(),
+      fileType: "social/stream",
+      platform: form.platform,
+      isSocial: true,
+      createdAt: new Date().toISOString(),
+    };
+
+    const nextAds = [...data.ads, newAd];
+    await api("/ads", { method: "PUT", body: JSON.stringify(nextAds) });
+
+    // If user selected a target TV, automatically add to that TV's playlist or create one
+    if (form.targetScreenId) {
+      const targetScreen = data.screens.find(s => s.id === form.targetScreenId);
+      if (targetScreen) {
+        if (targetScreen.playlistId) {
+          const nextPl = data.playlists.map(p =>
+            p.id === targetScreen.playlistId ? { ...p, adIds: [...p.adIds, newAd.id] } : p
+          );
+          await api("/playlists", { method: "PUT", body: JSON.stringify(nextPl) });
+        } else {
+          const newPl = { id: `pl_${Date.now()}`, name: `${targetScreen.name} Live Loop`, adIds: [newAd.id], createdAt: new Date().toISOString() };
+          await api("/playlists", { method: "PUT", body: JSON.stringify([...data.playlists, newPl]) });
+          const nextSc = data.screens.map(s => s.id === targetScreen.id ? { ...s, playlistId: newPl.id } : s);
+          await api("/screens", { method: "PUT", body: JSON.stringify(nextSc) });
+        }
+      }
+    }
+
+    setForm({ title: "", platform: "YouTube", url: "", duration: 30, targetScreenId: "" });
+    alert("సోషల్ మీడియా వీడియో యాడ్ విజయవంతంగా జోడించబడింది!");
+    await reload();
+  }
+
+  async function removeSocialAd(id) {
+    if (!confirm("ఈ సోషల్ మీడియా వీడియోను తొలగించాలా?")) return;
+    await api("/ads", { method: "PUT", body: JSON.stringify(data.ads.filter(a => a.id !== id)) });
+    await reload();
+  }
+
+  const socialAds = data.ads.filter(a => a.isSocial);
+
   return (
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
-      <h2>📱 Social Media & YouTube Live Integration</h2>
-      <p style={{ color: "#64748b", fontSize: "14px" }}>Connect your YouTube channels to broadcast bulletins across screens.</p>
+      <h2>📱 Social Media & Live Video Integration</h2>
+      <p style={{ color: "#64748b", fontSize: "14px", marginBottom: "15px" }}>
+        YouTube, Facebook, Instagram, X, Vimeo, Dailymotion లేదా డైరెక్ట్ లైవ్ లింక్‌లను యాడ్ చేసి ఏ టీవీలో కావాలంటే ఆ టీవీలో లైవ్ చేయవచ్చు.
+      </p>
+
+      <div style={{ background: "#f8fafc", padding: "15px", borderRadius: "8px", border: "1px solid #e2e8f0", marginBottom: "20px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px" }}>
+          <div>
+            <label style={{ fontSize: "12px", fontWeight: "600", display: "block", marginBottom: "4px" }}>Social Platform</label>
+            <select value={form.platform} onChange={e => setForm({ ...form, platform: e.target.value })} style={{ width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e1" }}>
+              {platforms.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: "12px", fontWeight: "600", display: "block", marginBottom: "4px" }}>Video / Channel Title</label>
+            <input type="text" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="ఉదా: Telugu Focus TV Live" style={{ width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e1" }} />
+          </div>
+          <div>
+            <label style={{ fontSize: "12px", fontWeight: "600", display: "block", marginBottom: "4px" }}>Play Duration (Seconds)</label>
+            <input type="number" value={form.duration} onChange={e => setForm({ ...form, duration: e.target.value })} style={{ width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e1" }} />
+          </div>
+          <div>
+            <label style={{ fontSize: "12px", fontWeight: "600", display: "block", marginBottom: "4px" }}>Push Directly to TV (Optional)</label>
+            <select value={form.targetScreenId} onChange={e => setForm({ ...form, targetScreenId: e.target.value })} style={{ width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e1" }}>
+              <option value="">Save to Ads Library Only</option>
+              {data.screens.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div style={{ marginTop: "10px" }}>
+          <label style={{ fontSize: "12px", fontWeight: "600", display: "block", marginBottom: "4px" }}>Social Video / Live URL</label>
+          <input type="text" value={form.url} onChange={e => setForm({ ...form, url: e.target.value })} placeholder="https://www.youtube.com/watch?v=... లేదా Facebook/Instagram/MP4 లింక్" style={{ width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e1" }} />
+        </div>
+
+        <button onClick={addSocialAd} style={{ marginTop: "12px", padding: "10px 20px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "600" }}>
+          + Add Social Video & Broadcast
+        </button>
+      </div>
+
+      <h3 style={{ margin: "0 0 10px" }}>Connected Social Media Streams ({socialAds.length})</h3>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "12px" }}>
+        {socialAds.map(sa => (
+          <div key={sa.id} style={{ border: "1px solid #e2e8f0", padding: "12px", borderRadius: "8px" }}>
+            <div style={{ fontWeight: "bold", fontSize: "14px" }}>{sa.name}</div>
+            <div style={{ fontSize: "12px", color: "#2563eb", margin: "4px 0", wordBreak: "break-all" }}>{sa.fileUrl}</div>
+            <div style={{ fontSize: "12px", color: "#64748b", marginBottom: "8px" }}>Duration: {sa.duration}s</div>
+            <button onClick={() => removeSocialAd(sa.id)} style={{ padding: "4px 10px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>🗑 Delete</button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
 
-function MarketingLeads() {
+/* ================= 12. MARKETING & LEADS ================= */
+function MarketingLeads({ data }) {
   return (
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
       <h2>📢 Local Digital Marketing & Lead Generation</h2>
-      <p style={{ color: "#64748b", fontSize: "14px" }}>Track QR code scans and customer engagement across cities.</p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "15px", marginTop: "15px" }}>
+        <div style={{ padding: "15px", background: "#f8fafc", borderRadius: "8px" }}>
+          <div style={{ fontSize: "13px", color: "#64748b" }}>Active TV Screens</div>
+          <div style={{ fontSize: "24px", fontWeight: "bold", color: "#2563eb", marginTop: "5px" }}>{data.screens.length}</div>
+        </div>
+        <div style={{ padding: "15px", background: "#f8fafc", borderRadius: "8px" }}>
+          <div style={{ fontSize: "13px", color: "#64748b" }}>Total Ad Impressions (Plays)</div>
+          <div style={{ fontSize: "24px", fontWeight: "bold", color: "#16a34a", marginTop: "5px" }}>{data.playback.length}</div>
+        </div>
+        <div style={{ padding: "15px", background: "#f8fafc", borderRadius: "8px" }}>
+          <div style={{ fontSize: "13px", color: "#64748b" }}>Active Advertisers</div>
+          <div style={{ fontSize: "24px", fontWeight: "bold", color: "#9333ea", marginTop: "5px" }}>{data.clients.length}</div>
+        </div>
+      </div>
     </div>
   );
 }
 
+/* ================= 13. AI TOOLS MODULE ================= */
 function AITools() {
   const [prompt, setPrompt] = useState("");
   const [generatedAd, setGeneratedAd] = useState("");
@@ -1205,31 +1600,60 @@ function AITools() {
   );
 }
 
-function Reports({ data }) {
+/* ================= 14. REPORTS MODULE (LIVE PROOF OF PLAY + ALL MODULE SUMMARY) ================= */
+function Reports({ data, reload }) {
   const rows = useMemo(() => {
-    const counts = {};
-    for (const playback of data.playback) {
-      const key = playback.adId || "unknown";
-      counts[key] = (counts[key] || 0) + 1;
+    const map = {};
+    for (const play of data.playback || []) {
+      const key = play.adId || play.adName || "unknown";
+      if (!map[key]) {
+        map[key] = {
+          adId: key,
+          name: data.ads.find(a => a.id === key)?.name || play.adName || key,
+          plays: 0,
+          lastScreen: play.screenName || play.screenId || "-",
+          lastPlayedAt: play.createdAt,
+        };
+      }
+      map[key].plays += 1;
+      map[key].lastScreen = play.screenName || play.screenId || map[key].lastScreen;
+      map[key].lastPlayedAt = play.createdAt;
     }
-    return Object.entries(counts).map(([adId, plays]) => ({
-      adId,
-      name: data.ads.find(ad => ad.id === adId)?.name || adId,
-      plays,
-    }));
+    return Object.values(map);
   }, [data]);
 
   return (
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
-      <h2>📊 Live Ad Proof of Play Reports</h2>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
+        <div>
+          <h2 style={{ margin: 0 }}>📊 Live Ad Proof of Play & System Reports</h2>
+          <small style={{ color: "#64748b" }}>టీవీలో యాడ్ ప్లే అయిన ప్రతిసారీ ఇక్కడ ఆటోమేటిక్‌గా అప్‌డేట్ అవుతుంది</small>
+        </div>
+        <button onClick={reload} style={{ padding: "6px 14px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>↻ Refresh Live Data</button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "10px", marginBottom: "20px" }}>
+        <div style={{ padding: "12px", background: "#f8fafc", borderRadius: "8px" }}><b>Total Plays:</b> {data.playback.length}</div>
+        <div style={{ padding: "12px", background: "#f8fafc", borderRadius: "8px" }}><b>TV Screens:</b> {data.screens.length}</div>
+        <div style={{ padding: "12px", background: "#f8fafc", borderRadius: "8px" }}><b>Total Ads:</b> {data.ads.length}</div>
+        <div style={{ padding: "12px", background: "#f8fafc", borderRadius: "8px" }}><b>Playlists:</b> {data.playlists.length}</div>
+        <div style={{ padding: "12px", background: "#f8fafc", borderRadius: "8px" }}><b>Schedules:</b> {data.schedules.length}</div>
+        <div style={{ padding: "12px", background: "#f8fafc", borderRadius: "8px" }}><b>Tickers:</b> {data.tickers.length}</div>
+      </div>
+
+      <h3 style={{ margin: "0 0 10px" }}>Advertisement Proof of Play Log</h3>
       {rows.length === 0 ? (
-        <div style={{ color: "#94a3b8" }}>ఇంకా playback reporting నమోదు కాలేదు.</div>
+        <div style={{ color: "#94a3b8", padding: "15px", background: "#f8fafc", borderRadius: "8px" }}>
+          ఇంకా playback reporting నమోదు కాలేదు. టీవీ ప్లేయర్ లింక్ ఓపెన్ చేసి యాడ్ ప్లే అవ్వగానే ఇక్కడ లైవ్ కౌంట్ కనిపిస్తుంది.
+        </div>
       ) : (
-        <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "14px" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "14px", marginBottom: "25px" }}>
           <thead>
             <tr style={{ borderBottom: "2px solid #e2e8f0" }}>
               <th style={{ padding: "10px" }}>Advertisement</th>
               <th style={{ padding: "10px" }}>Total Play Count</th>
+              <th style={{ padding: "10px" }}>Last Played TV</th>
+              <th style={{ padding: "10px" }}>Last Played Time</th>
             </tr>
           </thead>
           <tbody>
@@ -1237,15 +1661,44 @@ function Reports({ data }) {
               <tr key={row.adId} style={{ borderBottom: "1px solid #f1f5f9" }}>
                 <td style={{ padding: "10px", fontWeight: "600" }}>{row.name}</td>
                 <td style={{ padding: "10px", color: "#2563eb", fontWeight: "bold" }}>{row.plays} times</td>
+                <td style={{ padding: "10px" }}>{row.lastScreen}</td>
+                <td style={{ padding: "10px", fontSize: "12px", color: "#64748b" }}>{row.lastPlayedAt ? new Date(row.lastPlayedAt).toLocaleString() : "-"}</td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
+
+      {data.playback.length > 0 && (
+        <>
+          <h3 style={{ margin: "0 0 10px" }}>Recent Live Play History (Last 15)</h3>
+          <div style={{ maxHeight: "220px", overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: "8px" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "12px" }}>
+              <thead>
+                <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
+                  <th style={{ padding: "8px" }}>Time</th>
+                  <th style={{ padding: "8px" }}>TV Screen</th>
+                  <th style={{ padding: "8px" }}>Ad Played</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...data.playback].reverse().slice(0, 15).map(item => (
+                  <tr key={item.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                    <td style={{ padding: "8px" }}>{new Date(item.createdAt).toLocaleTimeString()}</td>
+                    <td style={{ padding: "8px" }}>{item.screenName || item.screenId}</td>
+                    <td style={{ padding: "8px", fontWeight: "600" }}>{item.adName || item.adId}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
+/* ================= 15. SETTINGS MODULE ================= */
 function Settings({ reload, cloudEnabled }) {
   const [restoring, setRestoring] = useState(false);
 
@@ -1320,7 +1773,7 @@ function Field({ label, value, set, type = "text" }) {
 function Modal({ title, close, children }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: "20px" }}>
-      <div style={{ background: "#fff", padding: "25px", borderRadius: "12px", width: "100%", maxWidth: "500px", maxHeight: "90vh", overflowY: "auto" }}>
+      <div style={{ background: "#fff", padding: "25px", borderRadius: "12px", width: "100%", maxWidth: "520px", maxHeight: "90vh", overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
           <h2 style={{ margin: 0, fontSize: "18px" }}>{title}</h2>
           <button onClick={close} style={{ background: "transparent", border: "none", fontSize: "18px", cursor: "pointer" }}>✕</button>
@@ -1337,24 +1790,45 @@ function formatMinutes(value) {
   return `${String(hours).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 }
 
+/* ================= TV PLAYER MODE (SHORT URL / AUDIO / SCROLLING TICKER / LIVE PROOF OF PLAY) ================= */
 function getPlayerScreenId() {
+  // Support clean short URLs like /tv/1 or /tv/tv_12345
+  const pathMatch = window.location.pathname.match(/^\/tv\/([^/]+)/i);
+  if (pathMatch) return decodeURIComponent(pathMatch[1]);
+
   const params = new URLSearchParams(window.location.search);
   return params.get("player") || params.get("screen") || "";
 }
 
 function PlayerMode({ screenId }) {
-  const [state, setState] = useState({ loading: true, error: "", screen: null, playlist: null, ads: [] });
+  const [state, setState] = useState({ loading: true, error: "", screen: null, playlist: null, ads: [], tickers: [] });
   const [index, setIndex] = useState(0);
+  const [muted, setMuted] = useState(false);
 
   async function loadPlayer() {
     if (!screenId) return;
     try {
       const result = await api(`/tv/${encodeURIComponent(screenId)}/player`);
       const ads = Array.isArray(result.ads) ? result.ads : Array.isArray(result.playlist?.ads) ? result.playlist.ads : [];
-      setState({ loading: false, error: "", screen: result.screen || null, playlist: result.playlist || null, ads });
+      const tickers = Array.isArray(result.tickers) ? result.tickers : [];
+      setState({ loading: false, error: "", screen: result.screen || null, playlist: result.playlist || null, ads, tickers });
     } catch (err) {
       setState(curr => ({ ...curr, loading: false, error: err.message || "Failed to load TV ads." }));
     }
+  }
+
+  async function logPlayback(ad) {
+    if (!ad) return;
+    try {
+      await api(`/tv/${encodeURIComponent(screenId)}/playback`, {
+        method: "POST",
+        body: JSON.stringify({
+          adId: ad.id,
+          adName: ad.name,
+          duration: ad.duration || 10,
+        }),
+      });
+    } catch {}
   }
 
   useEffect(() => {
@@ -1363,28 +1837,113 @@ function PlayerMode({ screenId }) {
     return () => clearInterval(timer);
   }, [screenId]);
 
+  const currentAd = state.ads.length ? state.ads[index % state.ads.length] : null;
+
+  useEffect(() => {
+    if (currentAd) {
+      logPlayback(currentAd);
+    }
+  }, [currentAd?.id, index]);
+
   if (state.loading) return <div style={{ background: "#000", color: "#fff", height: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>Connecting to Tirupati Central Hub...</div>;
   if (!state.ads.length) return <div style={{ background: "#000", color: "#fff", height: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>No ads assigned to this TV screen yet.</div>;
 
-  const ad = state.ads[index % state.ads.length];
+  const tickerText = state.tickers.map(t => `📢 ${t.text}`).join("     •     ");
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "#000", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <PlayerAd ad={ad} onFinished={() => setIndex(i => (i + 1) % state.ads.length)} />
+    <div
+      onClick={() => {
+        if (muted) setMuted(false);
+        if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        }
+      }}
+      style={{ position: "fixed", inset: 0, background: "#000", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}
+    >
+      <PlayerAd
+        ad={currentAd}
+        muted={muted}
+        onUnmuteRequest={() => setMuted(true)}
+        onFinished={() => setIndex(i => (i + 1) % state.ads.length)}
+      />
+
+      {muted && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setMuted(false); }}
+          style={{ position: "fixed", top: "15px", right: "15px", zIndex: 50, padding: "8px 14px", background: "rgba(0,0,0,0.75)", color: "#fff", border: "1px solid #fff", borderRadius: "20px", cursor: "pointer", fontSize: "13px" }}
+        >
+          🔇 Tap for Audio
+        </button>
+      )}
+
+      {tickerText && (
+        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "linear-gradient(90deg, #b91c1c, #dc2626)", color: "#fff", padding: "10px 0", fontSize: "20px", fontWeight: "bold", zIndex: 40, overflow: "hidden", whiteSpace: "nowrap", boxShadow: "0 -2px 10px rgba(0,0,0,0.6)" }}>
+          <style>{`
+            @keyframes tamMarquee {
+              0% { transform: translateX(100vw); }
+              100% { transform: translateX(-100%); }
+            }
+            .tam-scroll-text {
+              display: inline-block;
+              animation: tamMarquee 22s linear infinite;
+            }
+          `}</style>
+          <div className="tam-scroll-text">{tickerText}</div>
+        </div>
+      )}
     </div>
   );
 }
 
-function PlayerAd({ ad, onFinished }) {
+function PlayerAd({ ad, muted, onUnmuteRequest, onFinished }) {
   useEffect(() => {
-    if (ad.fileType?.startsWith("video/")) return;
+    if (ad.fileType?.startsWith("video/") && !ad.isSocial) return;
     const timer = setTimeout(onFinished, (ad.duration || 10) * 1000);
     return () => clearTimeout(timer);
   }, [ad, onFinished]);
 
-  if (ad.fileType?.startsWith("video/")) {
-    return <video src={mediaUrl(ad.fileUrl)} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "contain" }} onEnded={onFinished} />;
+  if (ad.isSocial) {
+    const ytId = extractYouTubeId(ad.fileUrl);
+    if (ytId) {
+      return (
+        <iframe
+          src={`https://www.youtube.com/embed/${ytId}?autoplay=1&mute=${muted ? 1 : 0}&controls=0&rel=0`}
+          style={{ width: "100%", height: "100%", border: "none" }}
+          allow="autoplay; fullscreen"
+          title={ad.name}
+        />
+      );
+    }
+    return (
+      <iframe
+        src={ad.fileUrl}
+        style={{ width: "100%", height: "100%", border: "none" }}
+        allow="autoplay; fullscreen"
+        title={ad.name}
+      />
+    );
   }
+
+  if (ad.fileType?.startsWith("video/")) {
+    return (
+      <video
+        key={ad.id + ad.fileUrl}
+        src={mediaUrl(ad.fileUrl)}
+        autoPlay
+        muted={muted}
+        playsInline
+        style={{ width: "100%", height: "100%", objectFit: "contain" }}
+        onPlay={(e) => {
+          // If browser blocks unmuted autoplay, fallback to muted so video still plays without freezing
+          if (e.target.paused) {
+            onUnmuteRequest();
+          }
+        }}
+        onEnded={onFinished}
+      />
+    );
+  }
+
   return <img src={mediaUrl(ad.fileUrl)} alt={ad.name} style={{ width: "100%", height: "100%", objectFit: "contain" }} />;
 }
 
