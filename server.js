@@ -216,7 +216,7 @@ app.get("/api/state", auth, (req, res) => {
     playlists: readData("playlists"),
     schedules: readData("schedules"),
     devices: readData("devices"),
-    playback: readData("playback").slice(-20000),
+    playback: readData("playback").slice(-10000),
     franchises: readData("franchises"),
     clients: readData("clients"),
     billings: readData("billings"),
@@ -237,37 +237,38 @@ for (const name of ["areas", "screens", "ads", "playlists", "schedules", "franch
   });
 }
 
-// Broadcast / Assign a single playlist or single ad to ALL 100+ TV screens at once
+// Broadcast one ad or one playlist to ALL 100+ TVs simultaneously
 app.post("/api/broadcast-all", auth, (req, res) => {
   const { playlistId, adId } = req.body || {};
   const screens = readData("screens");
-  if (!screens.length) {
-    return res.status(400).json({ error: "No TV screens registered yet." });
-  }
+  const playlists = readData("playlists");
+  const ads = readData("ads");
 
   let targetPlaylistId = playlistId || null;
 
   if (!targetPlaylistId && adId) {
-    const ads = readData("ads");
     const ad = ads.find(a => String(a.id) === String(adId));
     if (!ad) return res.status(404).json({ error: "Ad not found" });
 
-    const playlists = readData("playlists");
-    const broadcastPl = {
-      id: `pl_all_${Date.now()}`,
-      name: `All-TV Live: ${ad.name}`,
+    const newPl = {
+      id: makeId("pl_all"),
+      name: `Live Broadcast: ${ad.name}`,
       adIds: [ad.id],
       createdAt: now()
     };
-    writeData("playlists", [...playlists, broadcastPl]);
-    targetPlaylistId = broadcastPl.id;
+    playlists.push(newPl);
+    writeData("playlists", playlists);
+    targetPlaylistId = newPl.id;
   }
 
   if (!targetPlaylistId) {
-    return res.status(400).json({ error: "Playlist or Ad required" });
+    return res.status(400).json({ error: "playlistId or adId required" });
   }
 
-  const updatedScreens = screens.map(s => ({ ...s, playlistId: targetPlaylistId }));
+  const updatedScreens = screens.map(sc => ({
+    ...sc,
+    playlistId: targetPlaylistId
+  }));
   writeData("screens", updatedScreens);
   res.json({ ok: true, count: updatedScreens.length, playlistId: targetPlaylistId });
 });
@@ -280,7 +281,6 @@ const storage = multer.diskStorage({
   }
 });
 
-// Support all popular video & image formats
 const upload = multer({
   storage,
   limits: { fileSize: 200 * 1024 * 1024 },
@@ -555,21 +555,20 @@ app.post("/api/tv/:id/heartbeat", (req, res) => {
 
 app.post("/api/tv/:id/playback", (req, res) => {
   const screens = readData("screens");
+  const areas = readData("areas");
   const screen = screens.find(
     s => String(s.id) === String(req.params.id) || String(s.shortCode) === String(req.params.id)
   );
   if (!screen) return res.status(404).json({ error: "TV Screen not found" });
 
-  const areas = readData("areas");
-  const areaName = areas.find(a => String(a.id) === String(screen.areaId))?.name || "General";
-
+  const area = areas.find(a => String(a.id) === String(screen.areaId));
   const playback = readData("playback");
   const report = {
     id: makeId("play"),
     createdAt: now(),
     screenId: screen.id,
     screenName: screen.name,
-    areaName,
+    areaName: area ? area.name : "Remote",
     ...req.body
   };
   playback.push(report);
