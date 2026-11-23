@@ -73,7 +73,6 @@ function now() {
   return new Date().toISOString();
 }
 
-// Get accurate Indian Standard Time (IST = UTC + 5:30) regardless of cloud server timezone
 function getISTTimeInfo() {
   const utcMs = Date.now();
   const istDate = new Date(utcMs + 330 * 60 * 1000);
@@ -217,7 +216,7 @@ app.get("/api/state", auth, (req, res) => {
     playlists: readData("playlists"),
     schedules: readData("schedules"),
     devices: readData("devices"),
-    playback: readData("playback").slice(-5000),
+    playback: readData("playback").slice(-20000),
     franchises: readData("franchises"),
     clients: readData("clients"),
     billings: readData("billings"),
@@ -238,6 +237,41 @@ for (const name of ["areas", "screens", "ads", "playlists", "schedules", "franch
   });
 }
 
+// Broadcast / Assign a single playlist or single ad to ALL 100+ TV screens at once
+app.post("/api/broadcast-all", auth, (req, res) => {
+  const { playlistId, adId } = req.body || {};
+  const screens = readData("screens");
+  if (!screens.length) {
+    return res.status(400).json({ error: "No TV screens registered yet." });
+  }
+
+  let targetPlaylistId = playlistId || null;
+
+  if (!targetPlaylistId && adId) {
+    const ads = readData("ads");
+    const ad = ads.find(a => String(a.id) === String(adId));
+    if (!ad) return res.status(404).json({ error: "Ad not found" });
+
+    const playlists = readData("playlists");
+    const broadcastPl = {
+      id: `pl_all_${Date.now()}`,
+      name: `All-TV Live: ${ad.name}`,
+      adIds: [ad.id],
+      createdAt: now()
+    };
+    writeData("playlists", [...playlists, broadcastPl]);
+    targetPlaylistId = broadcastPl.id;
+  }
+
+  if (!targetPlaylistId) {
+    return res.status(400).json({ error: "Playlist or Ad required" });
+  }
+
+  const updatedScreens = screens.map(s => ({ ...s, playlistId: targetPlaylistId }));
+  writeData("screens", updatedScreens);
+  res.json({ ok: true, count: updatedScreens.length, playlistId: targetPlaylistId });
+});
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => {
@@ -246,12 +280,14 @@ const storage = multer.diskStorage({
   }
 });
 
-const allowedTypes = ["video/mp4", "video/webm", "image/jpeg", "image/png", "image/webp"];
-
+// Support all popular video & image formats
 const upload = multer({
   storage,
-  limits: { fileSize: 100 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => cb(null, allowedTypes.includes(file.mimetype))
+  limits: { fileSize: 200 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ok = file.mimetype.startsWith("video/") || file.mimetype.startsWith("image/");
+    cb(null, ok);
+  }
 });
 
 async function uploadToCloudinary(localFilePath, mimeType) {
@@ -284,7 +320,7 @@ async function uploadToCloudinary(localFilePath, mimeType) {
 
 app.post("/api/upload", auth, upload.single("file"), async (req, res) => {
   if (!req.file) {
-    return res.status(400).json({ error: "MP4, WebM, JPG, PNG, WebP files only" });
+    return res.status(400).json({ error: "Please select a valid video or image file" });
   }
 
   try {
@@ -524,16 +560,20 @@ app.post("/api/tv/:id/playback", (req, res) => {
   );
   if (!screen) return res.status(404).json({ error: "TV Screen not found" });
 
+  const areas = readData("areas");
+  const areaName = areas.find(a => String(a.id) === String(screen.areaId))?.name || "General";
+
   const playback = readData("playback");
   const report = {
     id: makeId("play"),
     createdAt: now(),
     screenId: screen.id,
     screenName: screen.name,
+    areaName,
     ...req.body
   };
   playback.push(report);
-  writeData("playback", playback.slice(-20000));
+  writeData("playback", playback.slice(-50000));
 
   screen.status = "online";
   screen.lastSeen = report.createdAt;
@@ -543,7 +583,7 @@ app.post("/api/tv/:id/playback", (req, res) => {
 
 app.get("/api/backup", auth, (req, res) => {
   res.json({
-    version: "2.2.0",
+    version: "2.3.0",
     createdAt: now(),
     areas: readData("areas"),
     screens: readData("screens"),
@@ -584,7 +624,6 @@ app.use("/api", (req, res) => {
   res.status(404).json({ error: "API endpoint not found", path: req.originalUrl });
 });
 
-// Support clean short URLs like /tv/1 or /tv/tv_12345 as well as SPA frontend
 app.use((req, res) => {
   const indexFile = path.join(DIST_DIR, "index.html");
   if (fs.existsSync(indexFile)) {
