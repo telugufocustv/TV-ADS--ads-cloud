@@ -41,7 +41,8 @@ const defaults = {
   franchises: [],
   clients: [],
   billings: [],
-  tickers: []
+  tickers: [],
+  socials: []
 };
 
 function filePath(name) {
@@ -65,11 +66,21 @@ function writeData(name, data) {
 }
 
 function makeId(prefix = "id") {
-  return `${prefix}_${crypto.randomBytes(6).toString("hex")}`;
+  return `${prefix}_${crypto.randomBytes(4).toString("hex")}`;
 }
 
 function now() {
   return new Date().toISOString();
+}
+
+// Get accurate Indian Standard Time (IST = UTC + 5:30) regardless of cloud server timezone
+function getISTTimeInfo() {
+  const utcMs = Date.now();
+  const istDate = new Date(utcMs + 330 * 60 * 1000);
+  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const today = dayNames[istDate.getUTCDay()];
+  const minutes = istDate.getUTCHours() * 60 + istDate.getUTCMinutes();
+  return { today, minutes, istString: istDate.toISOString() };
 }
 
 function hashPassword(password) {
@@ -131,8 +142,9 @@ function syncAllRelations() {
   }));
   writeData("playlists", syncedPlaylists);
 
-  const syncedScreens = screens.map(sc => ({
+  const syncedScreens = screens.map((sc, idx) => ({
     ...sc,
+    shortCode: sc.shortCode || String(idx + 1),
     areaId: sc.areaId && validAreaIds.has(String(sc.areaId)) ? sc.areaId : "",
     playlistId: sc.playlistId && validPlaylistIds.has(String(sc.playlistId)) ? sc.playlistId : null
   }));
@@ -178,6 +190,7 @@ app.get("/api/health", (req, res) => {
     ok: true,
     service: "TV AD MANAGER PRO",
     cloudStorage: Boolean(CLOUD_NAME && CLOUD_KEY && CLOUD_SECRET),
+    istTime: getISTTimeInfo(),
     time: now()
   });
 });
@@ -209,11 +222,12 @@ app.get("/api/state", auth, (req, res) => {
     clients: readData("clients"),
     billings: readData("billings"),
     tickers: readData("tickers"),
+    socials: readData("socials"),
     cloudEnabled: Boolean(CLOUD_NAME && CLOUD_KEY && CLOUD_SECRET)
   });
 });
 
-for (const name of ["areas", "screens", "ads", "playlists", "schedules", "franchises", "clients", "billings", "tickers"]) {
+for (const name of ["areas", "screens", "ads", "playlists", "schedules", "franchises", "clients", "billings", "tickers", "socials"]) {
   app.put(`/api/${name}`, auth, (req, res) => {
     if (!Array.isArray(req.body)) {
       return res.status(400).json({ error: "Array expected" });
@@ -341,6 +355,62 @@ app.post("/api/device/register", (req, res) => {
   });
 });
 
+function resolveScreenAndPlaylist(screenIdentifier) {
+  const screens = readData("screens");
+  const screen = screens.find(
+    s =>
+      String(s.id) === String(screenIdentifier) ||
+      String(s.shortCode) === String(screenIdentifier) ||
+      String(s.name).toLowerCase() === String(screenIdentifier).toLowerCase()
+  );
+  if (!screen) return null;
+
+  const ads = readData("ads");
+  const playlists = readData("playlists");
+  const schedules = readData("schedules");
+  const { today, minutes } = getISTTimeInfo();
+
+  let playlistId = screen.playlistId || null;
+  let activeSchedule = null;
+
+  const screenSchedules = schedules.filter(
+    s => s.active !== false && String(s.screenId) === String(screen.id)
+  );
+
+  for (const schedule of screenSchedules) {
+    const scheduleDays = Array.isArray(schedule.days) ? schedule.days : [];
+    const start = Number(schedule.start || 0);
+    const end = Number(schedule.end || 1440);
+    const timeOK = start <= end
+      ? minutes >= start && minutes < end
+      : minutes >= start || minutes < end;
+    const dayOK = scheduleDays.length === 0 || scheduleDays.includes(today);
+    if (timeOK && dayOK) {
+      playlistId = schedule.playlistId;
+      activeSchedule = schedule;
+    }
+  }
+
+  const playlist = playlists.find(p => String(p.id) === String(playlistId));
+  const playerAds = (playlist?.adIds || [])
+    .map(id => ads.find(ad => String(ad.id) === String(id)))
+    .filter(ad => ad && (ad.fileUrl || ad.fileKey));
+
+  screen.status = "online";
+  screen.lastSeen = now();
+  writeData("screens", screens);
+
+  const activeTickers = readData("tickers").filter(t => t.active !== false);
+
+  return {
+    screen,
+    playlist: playlist ? { ...playlist, ads: playerAds } : null,
+    ads: playerAds,
+    activeSchedule,
+    tickers: activeTickers
+  };
+}
+
 app.get("/api/device/:deviceId/config", (req, res) => {
   const devices = readData("devices");
   const device = devices.find(d => String(d.deviceId) === String(req.params.deviceId));
@@ -353,45 +423,12 @@ app.get("/api/device/:deviceId/config", (req, res) => {
     return res.json({ paired: false, pairCode: device.pairCode, deviceName: device.deviceName });
   }
 
-  const screens = readData("screens");
-  const ads = readData("ads");
-  const playlists = readData("playlists");
-  const schedules = readData("schedules");
-
-  const screen = screens.find(s => String(s.id) === String(device.screenId));
-  if (!screen) return res.status(404).json({ paired: false, error: "Screen not found" });
-
-  screen.status = "online";
-  screen.lastSeen = now();
-  writeData("screens", screens);
-
-  let playlistId = screen.playlistId || null;
-  const date = new Date();
-  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const today = dayNames[date.getDay()];
-  const minutes = date.getHours() * 60 + date.getMinutes();
-
-  const activeSchedules = schedules.filter(s => s.active && String(s.screenId) === String(screen.id));
-  for (const schedule of activeSchedules) {
-    const scheduleDays = Array.isArray(schedule.days) ? schedule.days : [];
-    const start = Number(schedule.start || 0);
-    const end = Number(schedule.end || 1440);
-    const timeOK = start <= end ? minutes >= start && minutes < end : minutes >= start || minutes < end;
-    const dayOK = scheduleDays.length === 0 || scheduleDays.includes(today);
-    if (timeOK && dayOK) playlistId = schedule.playlistId;
-  }
-
-  const playlist = playlists.find(p => String(p.id) === String(playlistId));
-  const playlistAds = (playlist?.adIds || [])
-    .map(id => ads.find(ad => String(ad.id) === String(id)))
-    .filter(Boolean);
+  const resolved = resolveScreenAndPlaylist(device.screenId);
+  if (!resolved) return res.status(404).json({ paired: false, error: "Screen not found" });
 
   res.json({
     paired: true,
-    screen,
-    playlist: playlist ? { ...playlist, ads: playlistAds } : null,
-    ads: playlistAds,
-    tickers: readData("tickers"),
+    ...resolved,
     serverTime: now(),
     heartbeatInterval: 10000
   });
@@ -433,6 +470,7 @@ app.post("/api/pair/approve", auth, (req, res) => {
   const screens = readData("screens");
   const screen = {
     id: makeId("tv"),
+    shortCode: String(screens.length + 1),
     name,
     areaId,
     deviceId: device.deviceId,
@@ -454,46 +492,13 @@ app.post("/api/pair/approve", auth, (req, res) => {
 });
 
 app.get("/api/tv/:id/player", (req, res) => {
-  const screenId = req.params.id;
-  const screens = readData("screens");
-  const screen = screens.find(s => String(s.id) === String(screenId));
-  if (!screen) return res.status(404).json({ error: "TV Screen not found", screenId });
-
-  const ads = readData("ads");
-  const playlists = readData("playlists");
-  const schedules = readData("schedules");
-
-  let playlistId = screen.playlistId || null;
-  const date = new Date();
-  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const today = days[date.getDay()];
-  const minutes = date.getHours() * 60 + date.getMinutes();
-
-  const screenSchedules = schedules.filter(s => s.active && String(s.screenId) === String(screenId));
-  for (const schedule of screenSchedules) {
-    const scheduleDays = Array.isArray(schedule.days) ? schedule.days : [];
-    const start = Number(schedule.start || 0);
-    const end = Number(schedule.end || 1440);
-    const timeOK = start <= end ? minutes >= start && minutes < end : minutes >= start || minutes < end;
-    const dayOK = scheduleDays.length === 0 || scheduleDays.includes(today);
-    if (timeOK && dayOK) playlistId = schedule.playlistId;
+  const resolved = resolveScreenAndPlaylist(req.params.id);
+  if (!resolved) {
+    return res.status(404).json({ error: "TV Screen not found", screenId: req.params.id });
   }
-
-  const playlist = playlists.find(p => String(p.id) === String(playlistId));
-  const playerAds = (playlist?.adIds || [])
-    .map(id => ads.find(ad => String(ad.id) === String(id)))
-    .filter(ad => ad && (ad.fileUrl || ad.fileKey));
-
-  screen.status = "online";
-  screen.lastSeen = now();
-  writeData("screens", screens);
-
   res.json({
     ok: true,
-    screen,
-    playlist: playlist ? { ...playlist, ads: playerAds } : null,
-    ads: playerAds,
-    tickers: readData("tickers"),
+    ...resolved,
     serverTime: now(),
     heartbeatInterval: 10000
   });
@@ -501,7 +506,9 @@ app.get("/api/tv/:id/player", (req, res) => {
 
 app.post("/api/tv/:id/heartbeat", (req, res) => {
   const screens = readData("screens");
-  const screen = screens.find(s => String(s.id) === String(req.params.id));
+  const screen = screens.find(
+    s => String(s.id) === String(req.params.id) || String(s.shortCode) === String(req.params.id)
+  );
   if (!screen) return res.status(404).json({ error: "TV Screen not found" });
 
   screen.status = "online";
@@ -512,11 +519,19 @@ app.post("/api/tv/:id/heartbeat", (req, res) => {
 
 app.post("/api/tv/:id/playback", (req, res) => {
   const screens = readData("screens");
-  const screen = screens.find(s => String(s.id) === String(req.params.id));
+  const screen = screens.find(
+    s => String(s.id) === String(req.params.id) || String(s.shortCode) === String(req.params.id)
+  );
   if (!screen) return res.status(404).json({ error: "TV Screen not found" });
 
   const playback = readData("playback");
-  const report = { id: makeId("play"), createdAt: now(), screenId: screen.id, ...req.body };
+  const report = {
+    id: makeId("play"),
+    createdAt: now(),
+    screenId: screen.id,
+    screenName: screen.name,
+    ...req.body
+  };
   playback.push(report);
   writeData("playback", playback.slice(-20000));
 
@@ -528,7 +543,7 @@ app.post("/api/tv/:id/playback", (req, res) => {
 
 app.get("/api/backup", auth, (req, res) => {
   res.json({
-    version: "2.1.0",
+    version: "2.2.0",
     createdAt: now(),
     areas: readData("areas"),
     screens: readData("screens"),
@@ -538,13 +553,14 @@ app.get("/api/backup", auth, (req, res) => {
     franchises: readData("franchises"),
     clients: readData("clients"),
     billings: readData("billings"),
-    tickers: readData("tickers")
+    tickers: readData("tickers"),
+    socials: readData("socials")
   });
 });
 
 app.post("/api/restore", auth, (req, res) => {
   const backup = req.body || {};
-  for (const name of ["areas", "screens", "ads", "playlists", "schedules", "franchises", "clients", "billings", "tickers"]) {
+  for (const name of ["areas", "screens", "ads", "playlists", "schedules", "franchises", "clients", "billings", "tickers", "socials"]) {
     if (Array.isArray(backup[name])) writeData(name, backup[name]);
   }
   syncAllRelations();
@@ -552,7 +568,7 @@ app.post("/api/restore", auth, (req, res) => {
 });
 
 app.post("/api/clear", auth, (req, res) => {
-  for (const name of ["areas", "screens", "ads", "playlists", "schedules", "playback", "franchises", "clients", "billings", "tickers"]) {
+  for (const name of ["areas", "screens", "ads", "playlists", "schedules", "playback", "franchises", "clients", "billings", "tickers", "socials"]) {
     writeData(name, []);
   }
   res.json({ ok: true });
@@ -568,6 +584,7 @@ app.use("/api", (req, res) => {
   res.status(404).json({ error: "API endpoint not found", path: req.originalUrl });
 });
 
+// Support clean short URLs like /tv/1 or /tv/tv_12345 as well as SPA frontend
 app.use((req, res) => {
   const indexFile = path.join(DIST_DIR, "index.html");
   if (fs.existsSync(indexFile)) {
