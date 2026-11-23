@@ -16,6 +16,10 @@ const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || "tv-ad-manager-pro-secret";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
 
+const CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || "";
+const CLOUD_KEY = process.env.CLOUDINARY_API_KEY || "";
+const CLOUD_SECRET = process.env.CLOUDINARY_API_SECRET || "";
+
 const DATA_DIR = path.join(__dirname, "data");
 const UPLOAD_DIR = path.join(__dirname, "uploads");
 const PUBLIC_DIR = path.join(__dirname, "public");
@@ -33,7 +37,11 @@ const defaults = {
   playlists: [],
   schedules: [],
   devices: [],
-  playback: []
+  playback: [],
+  franchises: [],
+  clients: [],
+  billings: [],
+  tickers: []
 };
 
 function filePath(name) {
@@ -105,8 +113,35 @@ function readAuth() {
   return fallback;
 }
 
-function writeAuth(authData) {
-  fs.writeFileSync(AUTH_FILE, JSON.stringify(authData, null, 2), "utf8");
+function syncAllRelations() {
+  const areas = readData("areas");
+  const screens = readData("screens");
+  const ads = readData("ads");
+  const playlists = readData("playlists");
+  const schedules = readData("schedules");
+
+  const validAdIds = new Set(ads.map(a => String(a.id)));
+  const validPlaylistIds = new Set(playlists.map(p => String(p.id)));
+  const validScreenIds = new Set(screens.map(s => String(s.id)));
+  const validAreaIds = new Set(areas.map(a => String(a.id)));
+
+  const syncedPlaylists = playlists.map(pl => ({
+    ...pl,
+    adIds: (pl.adIds || []).filter(id => validAdIds.has(String(id)))
+  }));
+  writeData("playlists", syncedPlaylists);
+
+  const syncedScreens = screens.map(sc => ({
+    ...sc,
+    areaId: sc.areaId && validAreaIds.has(String(sc.areaId)) ? sc.areaId : "",
+    playlistId: sc.playlistId && validPlaylistIds.has(String(sc.playlistId)) ? sc.playlistId : null
+  }));
+  writeData("screens", syncedScreens);
+
+  const syncedSchedules = schedules.filter(
+    sch => validScreenIds.has(String(sch.screenId)) && validPlaylistIds.has(String(sch.playlistId))
+  );
+  writeData("schedules", syncedSchedules);
 }
 
 app.use(cors({
@@ -139,7 +174,12 @@ function auth(req, res, next) {
 }
 
 app.get("/api/health", (req, res) => {
-  res.json({ ok: true, service: "TV AD MANAGER PRO", version: "2.0.0", time: now() });
+  res.json({
+    ok: true,
+    service: "TV AD MANAGER PRO",
+    cloudStorage: Boolean(CLOUD_NAME && CLOUD_KEY && CLOUD_SECRET),
+    time: now()
+  });
 });
 
 app.post("/api/login", (req, res) => {
@@ -155,32 +195,8 @@ app.post("/api/login", (req, res) => {
   res.json({ token, username: authData.username });
 });
 
-app.post("/api/change-password", auth, (req, res) => {
-  const currentPassword = String(req.body?.currentPassword || "");
-  const newPassword = String(req.body?.newPassword || "");
-  const username = String(req.body?.username || "").trim();
-  const authData = readAuth();
-
-  if (!verifyPassword(currentPassword, authData.passwordHash)) {
-    return res.status(400).json({ error: "Current password is incorrect" });
-  }
-  if (newPassword.length < 6) {
-    return res.status(400).json({ error: "New password must be at least 6 characters" });
-  }
-  if (username && username.length < 3) {
-    return res.status(400).json({ error: "Username must be at least 3 characters" });
-  }
-
-  const next = {
-    username: username || authData.username,
-    passwordHash: hashPassword(newPassword),
-    updatedAt: now()
-  };
-  writeAuth(next);
-  res.json({ ok: true, username: next.username });
-});
-
 app.get("/api/state", auth, (req, res) => {
+  syncAllRelations();
   res.json({
     areas: readData("areas"),
     screens: readData("screens"),
@@ -188,17 +204,23 @@ app.get("/api/state", auth, (req, res) => {
     playlists: readData("playlists"),
     schedules: readData("schedules"),
     devices: readData("devices"),
-    playback: readData("playback").slice(-5000)
+    playback: readData("playback").slice(-5000),
+    franchises: readData("franchises"),
+    clients: readData("clients"),
+    billings: readData("billings"),
+    tickers: readData("tickers"),
+    cloudEnabled: Boolean(CLOUD_NAME && CLOUD_KEY && CLOUD_SECRET)
   });
 });
 
-for (const name of ["areas", "screens", "ads", "playlists", "schedules"]) {
+for (const name of ["areas", "screens", "ads", "playlists", "schedules", "franchises", "clients", "billings", "tickers"]) {
   app.put(`/api/${name}`, auth, (req, res) => {
     if (!Array.isArray(req.body)) {
       return res.status(400).json({ error: "Array expected" });
     }
     writeData(name, req.body);
-    res.json(req.body);
+    syncAllRelations();
+    res.json(readData(name));
   });
 }
 
@@ -218,17 +240,64 @@ const upload = multer({
   fileFilter: (req, file, cb) => cb(null, allowedTypes.includes(file.mimetype))
 });
 
-app.post("/api/upload", auth, upload.single("file"), (req, res) => {
+async function uploadToCloudinary(localFilePath, mimeType) {
+  const timestamp = Math.floor(Date.now() / 1000);
+  const folder = "tv_ad_manager_pro";
+  const signString = `folder=${folder}&timestamp=${timestamp}${CLOUD_SECRET}`;
+  const signature = crypto.createHash("sha1").update(signString).digest("hex");
+
+  const resourceType = mimeType.startsWith("video/") ? "video" : "image";
+  const fileBuffer = fs.readFileSync(localFilePath);
+  const blob = new Blob([fileBuffer], { type: mimeType });
+
+  const form = new FormData();
+  form.append("file", blob, path.basename(localFilePath));
+  form.append("api_key", CLOUD_KEY);
+  form.append("timestamp", String(timestamp));
+  form.append("folder", folder);
+  form.append("signature", signature);
+
+  const resp = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/${resourceType}/upload`, {
+    method: "POST",
+    body: form
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.secure_url) {
+    throw new Error(data?.error?.message || "Cloudinary upload failed");
+  }
+  return { url: data.secure_url, publicId: data.public_id };
+}
+
+app.post("/api/upload", auth, upload.single("file"), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: "MP4, WebM, JPG, PNG, WebP files only" });
   }
-  res.json({
-    fileName: req.file.originalname,
-    fileType: req.file.mimetype,
-    fileSize: req.file.size,
-    fileKey: req.file.filename,
-    fileUrl: `/uploads/${req.file.filename}`
-  });
+
+  try {
+    if (CLOUD_NAME && CLOUD_KEY && CLOUD_SECRET) {
+      const cloud = await uploadToCloudinary(req.file.path, req.file.mimetype);
+      try { fs.unlinkSync(req.file.path); } catch {}
+      return res.json({
+        fileName: req.file.originalname,
+        fileType: req.file.mimetype,
+        fileSize: req.file.size,
+        fileKey: cloud.publicId,
+        fileUrl: cloud.url,
+        permanent: true
+      });
+    }
+
+    res.json({
+      fileName: req.file.originalname,
+      fileType: req.file.mimetype,
+      fileSize: req.file.size,
+      fileKey: req.file.filename,
+      fileUrl: `/uploads/${req.file.filename}`,
+      permanent: false
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Upload error" });
+  }
 });
 
 app.delete("/api/upload/:key", auth, (req, res) => {
@@ -322,8 +391,9 @@ app.get("/api/device/:deviceId/config", (req, res) => {
     screen,
     playlist: playlist ? { ...playlist, ads: playlistAds } : null,
     ads: playlistAds,
+    tickers: readData("tickers"),
     serverTime: now(),
-    heartbeatInterval: 15000
+    heartbeatInterval: 10000
   });
 });
 
@@ -423,8 +493,9 @@ app.get("/api/tv/:id/player", (req, res) => {
     screen,
     playlist: playlist ? { ...playlist, ads: playerAds } : null,
     ads: playerAds,
+    tickers: readData("tickers"),
     serverTime: now(),
-    heartbeatInterval: 15000
+    heartbeatInterval: 10000
   });
 });
 
@@ -457,26 +528,31 @@ app.post("/api/tv/:id/playback", (req, res) => {
 
 app.get("/api/backup", auth, (req, res) => {
   res.json({
-    version: "2.0.0",
+    version: "2.1.0",
     createdAt: now(),
     areas: readData("areas"),
     screens: readData("screens"),
     ads: readData("ads"),
     playlists: readData("playlists"),
-    schedules: readData("schedules")
+    schedules: readData("schedules"),
+    franchises: readData("franchises"),
+    clients: readData("clients"),
+    billings: readData("billings"),
+    tickers: readData("tickers")
   });
 });
 
 app.post("/api/restore", auth, (req, res) => {
   const backup = req.body || {};
-  for (const name of ["areas", "screens", "ads", "playlists", "schedules"]) {
+  for (const name of ["areas", "screens", "ads", "playlists", "schedules", "franchises", "clients", "billings", "tickers"]) {
     if (Array.isArray(backup[name])) writeData(name, backup[name]);
   }
+  syncAllRelations();
   res.json({ ok: true });
 });
 
 app.post("/api/clear", auth, (req, res) => {
-  for (const name of ["areas", "screens", "ads", "playlists", "schedules", "playback"]) {
+  for (const name of ["areas", "screens", "ads", "playlists", "schedules", "playback", "franchises", "clients", "billings", "tickers"]) {
     writeData(name, []);
   }
   res.json({ ok: true });
