@@ -108,7 +108,6 @@ function AdminApp() {
       setData({
         ...emptyData,
         ...result,
-        // Load custom offline/extended modules from local cache if not on backend yet
         franchises: result.franchises || JSON.parse(localStorage.getItem("tam_franchises") || "[]"),
         clients: result.clients || JSON.parse(localStorage.getItem("tam_clients") || "[]"),
         billings: result.billings || JSON.parse(localStorage.getItem("tam_billings") || "[]"),
@@ -738,32 +737,62 @@ function Ads({ data, setData }) {
   );
 }
 
-/* ================= 4. PLAYLISTS MODULE ================= */
+/* ================= 4. PLAYLISTS MODULE (WITH EDIT & UNLIMITED ADS) ================= */
 function Playlists({ data, setData }) {
   const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({ name: "", adIds: [] });
 
   function toggleAd(adId, checked) {
     setForm(curr => ({
       ...curr,
-      adIds: checked ? [...curr.adIds, adId] : curr.adIds.filter(id => id !== adId),
+      adIds: checked
+        ? [...curr.adIds, adId]
+        : curr.adIds.filter(id => id !== adId),
     }));
+  }
+
+  function openCreateModal() {
+    setEditingId(null);
+    setForm({ name: "", adIds: [] });
+    setOpen(true);
+  }
+
+  function openEditModal(pl) {
+    setEditingId(pl.id);
+    setForm({
+      name: pl.name,
+      adIds: Array.isArray(pl.adIds) ? [...pl.adIds] : [],
+    });
+    setOpen(true);
   }
 
   async function savePlaylist() {
     if (!form.name.trim()) return alert("Playlist Name ఇవ్వండి.");
     if (form.adIds.length === 0) return alert("కనీసం ఒక Ad ఎంపిక చేయండి.");
-    const playlist = {
-      id: `pl_${Date.now()}`,
-      name: form.name.trim(),
-      adIds: form.adIds,
-      createdAt: new Date().toISOString(),
-    };
-    const next = [...data.playlists, playlist];
+
+    let next;
+    if (editingId) {
+      next = data.playlists.map(pl =>
+        pl.id === editingId
+          ? { ...pl, name: form.name.trim(), adIds: form.adIds, updatedAt: new Date().toISOString() }
+          : pl
+      );
+    } else {
+      const playlist = {
+        id: `pl_${Date.now()}`,
+        name: form.name.trim(),
+        adIds: form.adIds,
+        createdAt: new Date().toISOString(),
+      };
+      next = [...data.playlists, playlist];
+    }
+
     try {
       await api("/playlists", { method: "PUT", body: JSON.stringify(next) });
       setData({ ...data, playlists: next });
       setForm({ name: "", adIds: [] });
+      setEditingId(null);
       setOpen(false);
     } catch (err) {
       alert(err.message);
@@ -785,7 +814,7 @@ function Playlists({ data, setData }) {
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
         <h2 style={{ margin: 0 }}>▶ TV Playlists ({data.playlists.length})</h2>
-        <button onClick={() => setOpen(true)} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Create New Playlist</button>
+        <button onClick={openCreateModal} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Create New Playlist</button>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "15px" }}>
@@ -793,30 +822,77 @@ function Playlists({ data, setData }) {
           <div key={pl.id} style={{ border: "1px solid #e2e8f0", padding: "15px", borderRadius: "8px" }}>
             <h3 style={{ margin: "0 0 5px" }}>{pl.name}</h3>
             <p style={{ margin: "0 0 10px", fontSize: "13px", color: "#64748b" }}>{pl.adIds.length} Advertisements in Loop</p>
-            <div style={{ fontSize: "12px", background: "#f8fafc", padding: "8px", borderRadius: "4px", marginBottom: "10px", maxHeight: "100px", overflowY: "auto" }}>
+            <div style={{ fontSize: "12px", background: "#f8fafc", padding: "8px", borderRadius: "4px", marginBottom: "10px", maxHeight: "140px", overflowY: "auto" }}>
               {pl.adIds.map((aid, idx) => (
-                <div key={aid}>{idx + 1}. {data.ads.find(a => a.id === aid)?.name || "Ad"}</div>
+                <div key={`${aid}_${idx}`} style={{ padding: "2px 0" }}>
+                  {idx + 1}. {data.ads.find(a => a.id === aid)?.name || "Ad (Deleted)"}
+                </div>
               ))}
             </div>
-            <button onClick={() => removePlaylist(pl.id)} style={{ padding: "4px 8px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}>Delete Playlist</button>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button
+                onClick={() => openEditModal(pl)}
+                style={{ flex: 1, padding: "6px 10px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px", fontWeight: "600" }}
+              >
+                ✏️ Edit / Add Ads
+              </button>
+              <button
+                onClick={() => removePlaylist(pl.id)}
+                style={{ padding: "6px 10px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}
+              >
+                Delete
+              </button>
+            </div>
           </div>
         ))}
       </div>
 
       {open && (
-        <Modal title="Create New Playlist" close={() => setOpen(false)}>
+        <Modal
+          title={editingId ? "Edit Playlist & Add More Ads" : "Create New Playlist"}
+          close={() => { setOpen(false); setEditingId(null); }}
+        >
           <Field label="Playlist Name (e.g. Hyderabad Prime Loop)" value={form.name} set={v => setForm({ ...form, name: v })} />
           <div style={{ marginBottom: "15px" }}>
-            <label style={{ display: "block", fontSize: "13px", fontWeight: "600", marginBottom: "6px" }}>Select Ads for this Loop</label>
-            {data.ads.length === 0 ? <p style={{ fontSize: "13px", color: "#b91c1c" }}>ముందుగా కొన్ని Ads అప్‌లోడ్ చేయండి.</p> : (
-              data.ads.map(ad => (
-                <label key={ad.id} style={{ display: "block", margin: "6px 0", fontSize: "13px" }}>
-                  <input type="checkbox" checked={form.adIds.includes(ad.id)} onChange={e => toggleAd(ad.id, e.target.checked)} /> {ad.name}
-                </label>
-              ))
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+              <label style={{ fontSize: "13px", fontWeight: "600" }}>
+                Select Ads for this Loop ({form.adIds.length} selected)
+              </label>
+              {data.ads.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setForm(curr => ({
+                    ...curr,
+                    adIds: curr.adIds.length === data.ads.length ? [] : data.ads.map(a => a.id)
+                  }))}
+                  style={{ fontSize: "11px", color: "#2563eb", background: "transparent", border: "none", cursor: "pointer", textDecoration: "underline" }}
+                >
+                  {form.adIds.length === data.ads.length ? "Unselect All" : "Select All Ads"}
+                </button>
+              )}
+            </div>
+
+            {data.ads.length === 0 ? (
+              <p style={{ fontSize: "13px", color: "#b91c1c" }}>ముందుగా 'Advertisements' లో కొన్ని Ads అప్‌లోడ్ చేయండి.</p>
+            ) : (
+              <div style={{ maxHeight: "240px", overflowY: "auto", border: "1px solid #cbd5e1", borderRadius: "6px", padding: "8px" }}>
+                {data.ads.map(ad => (
+                  <label key={ad.id} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 4px", borderBottom: "1px solid #f1f5f9", fontSize: "13px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={form.adIds.includes(ad.id)}
+                      onChange={e => toggleAd(ad.id, e.target.checked)}
+                    />
+                    <span>{ad.name}</span>
+                    <span style={{ marginLeft: "auto", fontSize: "11px", color: "#64748b" }}>{ad.duration || 10}s</span>
+                  </label>
+                ))}
+              </div>
             )}
           </div>
-          <button className="btn" onClick={savePlaylist} style={{ width: "100%", padding: "10px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px" }}>Save Playlist</button>
+          <button className="btn" onClick={savePlaylist} style={{ width: "100%", padding: "10px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", fontWeight: "bold", cursor: "pointer" }}>
+            {editingId ? "Save Changes" : "Save Playlist"}
+          </button>
         </Modal>
       )}
     </div>
