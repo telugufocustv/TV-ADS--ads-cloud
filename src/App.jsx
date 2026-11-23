@@ -69,9 +69,7 @@ async function api(path, options = {}) {
     try {
       const result = await response.json();
       message = result.error || message;
-    } catch {
-      // Keep the HTTP status message.
-    }
+    } catch {}
     throw new Error(message);
   }
 
@@ -90,6 +88,7 @@ const emptyData = {
   clients: [],
   billings: [],
   tickers: [],
+  cloudEnabled: false,
 };
 
 function AdminApp() {
@@ -102,20 +101,14 @@ function AdminApp() {
   async function loadData() {
     setLoading(true);
     setError("");
-
     try {
       const result = await api("/state");
       setData({
         ...emptyData,
         ...result,
-        franchises: result.franchises || JSON.parse(localStorage.getItem("tam_franchises") || "[]"),
-        clients: result.clients || JSON.parse(localStorage.getItem("tam_clients") || "[]"),
-        billings: result.billings || JSON.parse(localStorage.getItem("tam_billings") || "[]"),
-        tickers: result.tickers || JSON.parse(localStorage.getItem("tam_tickers") || "[]"),
       });
     } catch (err) {
       setError(err.message);
-
       if (
         err.message.toLowerCase().includes("login") ||
         err.message.toLowerCase().includes("session")
@@ -169,8 +162,7 @@ function AdminApp() {
     plays: (data.playback || []).length,
   };
 
-  const currentTitle =
-    NAV.find(([key]) => key === page)?.[1] || "Dashboard";
+  const currentTitle = NAV.find(([key]) => key === page)?.[1] || "Dashboard";
 
   return (
     <div className="app" style={{ display: "flex", minHeight: "100vh" }}>
@@ -208,7 +200,7 @@ function AdminApp() {
           <div>
             <h1 style={{ margin: 0, fontSize: "24px", color: "#0f172a" }}>{currentTitle}</h1>
             <div className="muted" style={{ fontSize: "13px", color: "#64748b" }}>
-              Central Multi-City Remote TV Controller • Tirupati Hub
+              Central Multi-City Remote TV Controller • Tirupati Hub • {data.cloudEnabled ? "☁️ Permanent Cloud Storage Active" : "⚠ Local Ephemeral Storage"}
             </div>
           </div>
 
@@ -225,11 +217,11 @@ function AdminApp() {
         {error && <div className="notice" style={{ padding: "12px", background: "#fee2e2", color: "#991b1b", borderRadius: "8px", marginBottom: "15px" }}>{error}</div>}
 
         {page === "dashboard" && <Dashboard counts={counts} data={data} setPage={setPage} />}
-        {page === "areas" && <Areas data={data} setData={setData} />}
-        {page === "screens" && <Screens data={data} setData={setData} />}
-        {page === "ads" && <Ads data={data} setData={setData} />}
-        {page === "playlists" && <Playlists data={data} setData={setData} />}
-        {page === "schedules" && <Schedules data={data} setData={setData} />}
+        {page === "areas" && <Areas data={data} setData={setData} reload={loadData} />}
+        {page === "screens" && <Screens data={data} setData={setData} reload={loadData} />}
+        {page === "ads" && <Ads data={data} setData={setData} reload={loadData} />}
+        {page === "playlists" && <Playlists data={data} setData={setData} reload={loadData} />}
+        {page === "schedules" && <Schedules data={data} setData={setData} reload={loadData} />}
         {page === "live" && <LiveCenter data={data} />}
         {page === "franchise" && <Franchise data={data} setData={setData} />}
         {page === "crm" && <CRM data={data} setData={setData} />}
@@ -239,7 +231,7 @@ function AdminApp() {
         {page === "marketing" && <MarketingLeads />}
         {page === "aitools" && <AITools />}
         {page === "reports" && <Reports data={data} />}
-        {page === "settings" && <Settings reload={loadData} />}
+        {page === "settings" && <Settings reload={loadData} cloudEnabled={data.cloudEnabled} />}
       </main>
     </div>
   );
@@ -256,7 +248,6 @@ function Login({ onLogin }) {
   async function submit(event) {
     event.preventDefault();
     setError("");
-
     const cleanedServerUrl = serverUrl.trim().replace(/\/+$/, "");
     localStorage.setItem("tam_server_url", cleanedServerUrl || window.location.origin);
     setBusy(true);
@@ -266,10 +257,7 @@ function Login({ onLogin }) {
         method: "POST",
         body: JSON.stringify({ username: "admin", password }),
       });
-
-      if (!result?.token) {
-        throw new Error("Server login responseలో token లేదు.");
-      }
+      if (!result?.token) throw new Error("Server login responseలో token లేదు.");
       onLogin(result.token);
     } catch (err) {
       const message = err?.message || "Unable to connect to server.";
@@ -296,18 +284,12 @@ function Login({ onLogin }) {
             value={serverUrl}
             onChange={(event) => setServerUrl(event.target.value)}
             style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1" }}
-            placeholder="https://your-tunnel.loca.lt"
           />
         </div>
 
         <div className="field" style={{ marginBottom: "15px" }}>
           <label style={{ display: "block", fontSize: "13px", fontWeight: "600", marginBottom: "6px" }}>Username</label>
-          <input
-            type="text"
-            value="admin"
-            disabled
-            style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1", background: "#f1f5f9" }}
-          />
+          <input type="text" value="admin" disabled style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1", background: "#f1f5f9" }} />
         </div>
 
         <div className="field" style={{ marginBottom: "20px" }}>
@@ -327,10 +309,6 @@ function Login({ onLogin }) {
         <button className="btn" style={{ width: "100%", padding: "12px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "8px", fontWeight: "bold", cursor: "pointer" }} disabled={busy}>
           {busy ? "Connecting..." : "Login"}
         </button>
-
-        <p className="small muted" style={{ textAlign: "center", marginTop: "15px", fontSize: "12px", color: "#94a3b8" }}>
-          Default setup: admin / admin123
-        </p>
       </form>
     </div>
   );
@@ -352,10 +330,6 @@ function Dashboard({ counts, data, setPage }) {
 
       <div className="panel" style={{ background: "#fff", padding: "20px", borderRadius: "12px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)", marginBottom: "20px" }}>
         <h2 style={{ margin: "0 0 10px", fontSize: "18px" }}>Remote TV Network Control Hub</h2>
-        <p style={{ margin: "0 0 15px", color: "#64748b", fontSize: "14px" }}>
-          మీరు తిరుపతి ఇంట్లో నుంచే హైదరాబాద్, వైజాగ్, విజయవాడ వంటి వేర్వేరు నగరాల్లోని TV స్క్రీన్లను నేరుగా కంట్రోల్ చేయవచ్చు.
-        </p>
-
         <div className="actions" style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
           <button className="btn" style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => setPage("ads")}>+ Advertisement</button>
           <button className="btn" style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }} onClick={() => setPage("playlists")}>▶ Playlist</button>
@@ -393,10 +367,7 @@ function Dashboard({ counts, data, setPage }) {
                   </td>
                   <td style={{ padding: "10px" }}>
                     <button
-                      onClick={() => {
-                        const url = `${getServerOrigin()}/?player=${encodeURIComponent(screen.id)}`;
-                        window.open(url, "_blank", "noopener,noreferrer");
-                      }}
+                      onClick={() => window.open(`${getServerOrigin()}/?player=${encodeURIComponent(screen.id)}`, "_blank", "noopener,noreferrer")}
                       style={{ padding: "6px 12px", background: "#10b981", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "12px" }}
                     >
                       ▶ Watch / Launch
@@ -423,37 +394,28 @@ function StatCard({ icon, title, value }) {
   );
 }
 
-/* ================= 1. AREAS MODULE ================= */
-function Areas({ data, setData }) {
+function Areas({ data, reload }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", city: "", state: "" });
 
   async function save() {
     if (!form.name.trim()) return alert("Area Name ఇవ్వండి.");
-    const newArea = {
-      id: `area_${Date.now()}`,
-      name: form.name.trim(),
-      city: form.city.trim(),
-      state: form.state.trim(),
-      active: true,
-    };
-    const next = [...data.areas, newArea];
+    const newArea = { id: `area_${Date.now()}`, name: form.name.trim(), city: form.city.trim(), state: form.state.trim(), active: true };
     try {
-      await api("/areas", { method: "PUT", body: JSON.stringify(next) });
-      setData({ ...data, areas: next });
+      await api("/areas", { method: "PUT", body: JSON.stringify([...data.areas, newArea]) });
       setForm({ name: "", city: "", state: "" });
       setOpen(false);
+      await reload();
     } catch (err) {
       alert(err.message);
     }
   }
 
   async function remove(id) {
-    if (!confirm("ఈ Areaను తొలగించాలా?")) return;
-    const next = data.areas.filter(a => a.id !== id);
+    if (!confirm("ఈ Areaను తొలగించాలా? (సంబంధిత TV లొకేషన్ కూడా ఆటోమేటిక్‌గా అప్‌డేట్ అవుతుంది)")) return;
     try {
-      await api("/areas", { method: "PUT", body: JSON.stringify(next) });
-      setData({ ...data, areas: next });
+      await api("/areas", { method: "PUT", body: JSON.stringify(data.areas.filter(a => a.id !== id)) });
+      await reload();
     } catch (err) {
       alert(err.message);
     }
@@ -478,8 +440,8 @@ function Areas({ data, setData }) {
 
       {open && (
         <Modal title="Add Area / City" close={() => setOpen(false)}>
-          <Field label="Area Name (e.g. Hyderabad Hitech City / Tirupati Center)" value={form.name} set={v => setForm({ ...form, name: v })} />
-          <Field label="City (e.g. Tirupati, Hyderabad, Vizag)" value={form.city} set={v => setForm({ ...form, city: v })} />
+          <Field label="Area Name" value={form.name} set={v => setForm({ ...form, name: v })} />
+          <Field label="City" value={form.city} set={v => setForm({ ...form, city: v })} />
           <Field label="State" value={form.state} set={v => setForm({ ...form, state: v })} />
           <button className="btn" onClick={save} style={{ marginTop: "15px", width: "100%", padding: "10px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px" }}>Save Area</button>
         </Modal>
@@ -488,16 +450,14 @@ function Areas({ data, setData }) {
   );
 }
 
-/* ================= 2. SCREENS MODULE ================= */
-function Screens({ data, setData }) {
+function Screens({ data, reload }) {
   const [pending, setPending] = useState([]);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", areaId: "" });
 
   async function loadPending() {
     try {
-      const result = await api("/pair/pending");
-      setPending(result);
+      setPending(await api("/pair/pending"));
     } catch {
       setPending([]);
     }
@@ -509,12 +469,12 @@ function Screens({ data, setData }) {
     const name = prompt("TV Screen Name", device.deviceName || "TV Screen");
     if (!name) return;
     const areaId = data.areas[0]?.id || "";
-    const result = await api("/pair/approve", {
+    await api("/pair/approve", {
       method: "POST",
       body: JSON.stringify({ pairCode: device.pairCode, name, areaId }),
     });
-    setData({ ...data, screens: [...data.screens, result] });
     await loadPending();
+    await reload();
   }
 
   async function createManualScreen() {
@@ -528,12 +488,11 @@ function Screens({ data, setData }) {
       playlistId: null,
       createdAt: new Date().toISOString(),
     };
-    const next = [...data.screens, newScreen];
     try {
-      await api("/screens", { method: "PUT", body: JSON.stringify(next) });
-      setData({ ...data, screens: next });
+      await api("/screens", { method: "PUT", body: JSON.stringify([...data.screens, newScreen]) });
       setForm({ name: "", areaId: "" });
       setOpen(false);
+      await reload();
     } catch (err) {
       alert(err.message);
     }
@@ -543,7 +502,7 @@ function Screens({ data, setData }) {
     const next = data.screens.map(s => s.id === screenId ? { ...s, playlistId: playlistId || null } : s);
     try {
       await api("/screens", { method: "PUT", body: JSON.stringify(next) });
-      setData({ ...data, screens: next });
+      await reload();
     } catch (err) {
       alert(err.message);
     }
@@ -551,10 +510,9 @@ function Screens({ data, setData }) {
 
   async function removeScreen(id) {
     if (!confirm("ఈ TV Screen ను తీసివేయాలా?")) return;
-    const next = data.screens.filter(s => s.id !== id);
     try {
-      await api("/screens", { method: "PUT", body: JSON.stringify(next) });
-      setData({ ...data, screens: next });
+      await api("/screens", { method: "PUT", body: JSON.stringify(data.screens.filter(s => s.id !== id)) });
+      await reload();
     } catch (err) {
       alert(err.message);
     }
@@ -565,7 +523,7 @@ function Screens({ data, setData }) {
       <div style={{ marginBottom: "20px", padding: "15px", background: "#f8fafc", borderRadius: "8px", border: "1px dashed #cbd5e1" }}>
         <h3 style={{ margin: "0 0 8px" }}>🔗 Remote Android TV Pairing</h3>
         <p style={{ margin: "0 0 10px", fontSize: "13px", color: "#64748b" }}>
-          వేరే ఊర్లోని TV / Smart Box లో బ్రౌజర్‌లో <b>{getServerOrigin()}/player</b> ఓపెన్ చేస్తే వచ్చే 6-digit Code ను ఇక్కడ చూడవచ్చు.
+          టీవీ బ్రౌజర్‌లో <b>{getServerOrigin()}/player</b> ఓపెన్ చేస్తే వచ్చే 6-digit Code ను ఇక్కడ చూడవచ్చు.
         </p>
         {pending.length === 0 ? (
           <div style={{ fontSize: "13px", color: "#94a3b8" }}>No pending TV devices waiting to pair right now.</div>
@@ -597,7 +555,7 @@ function Screens({ data, setData }) {
               </span>
             </div>
             <p style={{ margin: "5px 0 10px", color: "#64748b", fontSize: "13px" }}>Location: {data.areas.find(a => a.id === screen.areaId)?.name || "Remote"}</p>
-            
+
             <div style={{ marginBottom: "10px" }}>
               <label style={{ fontSize: "12px", color: "#475569", display: "block", marginBottom: "4px" }}>Select Playlist to Play:</label>
               <select
@@ -614,10 +572,7 @@ function Screens({ data, setData }) {
 
             <div style={{ display: "flex", gap: "8px" }}>
               <button
-                onClick={() => {
-                  const url = `${getServerOrigin()}/?player=${encodeURIComponent(screen.id)}`;
-                  window.open(url, "_blank", "noopener,noreferrer");
-                }}
+                onClick={() => window.open(`${getServerOrigin()}/?player=${encodeURIComponent(screen.id)}`, "_blank", "noopener,noreferrer")}
                 style={{ flex: 1, padding: "6px", background: "#10b981", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" }}
               >
                 ▶ Play TV
@@ -630,7 +585,7 @@ function Screens({ data, setData }) {
 
       {open && (
         <Modal title="Add TV Screen Manually" close={() => setOpen(false)}>
-          <Field label="TV Name (e.g. Hyderabad Mall 1st Floor)" value={form.name} set={v => setForm({ ...form, name: v })} />
+          <Field label="TV Name" value={form.name} set={v => setForm({ ...form, name: v })} />
           <div style={{ marginBottom: "15px" }}>
             <label style={{ display: "block", fontSize: "13px", fontWeight: "600", marginBottom: "6px" }}>City / Area</label>
             <select value={form.areaId} onChange={e => setForm({ ...form, areaId: e.target.value })} style={{ width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e1" }}>
@@ -645,8 +600,7 @@ function Screens({ data, setData }) {
   );
 }
 
-/* ================= 3. ADS MODULE ================= */
-function Ads({ data, setData }) {
+function Ads({ data, reload }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", duration: 10, file: null });
   const [busy, setBusy] = useState(false);
@@ -666,11 +620,10 @@ function Ads({ data, setData }) {
         ...uploaded,
         createdAt: new Date().toISOString(),
       };
-      const next = [...data.ads, advertisement];
-      await api("/ads", { method: "PUT", body: JSON.stringify(next) });
-      setData({ ...data, ads: next });
+      await api("/ads", { method: "PUT", body: JSON.stringify([...data.ads, advertisement]) });
       setForm({ name: "", duration: 10, file: null });
       setOpen(false);
+      await reload();
     } catch (err) {
       alert(err.message);
     } finally {
@@ -679,14 +632,13 @@ function Ads({ data, setData }) {
   }
 
   async function deleteAdvertisement(ad) {
-    if (!confirm("ఈ advertisement ను తొలగించాలా?")) return;
-    const next = data.ads.filter(item => item.id !== ad.id);
+    if (!confirm("ఈ advertisement ను తొలగించాలా? (ఇది అన్ని Playlists నుండి కూడా ఆటోమేటిక్‌గా తొలగిపోతుంది)")) return;
     try {
-      await api("/ads", { method: "PUT", body: JSON.stringify(next) });
-      if (ad.fileKey) {
+      await api("/ads", { method: "PUT", body: JSON.stringify(data.ads.filter(item => item.id !== ad.id)) });
+      if (ad.fileKey && !ad.permanent) {
         try { await api(`/upload/${encodeURIComponent(ad.fileKey)}`, { method: "DELETE" }); } catch {}
       }
-      setData({ ...data, ads: next });
+      await reload();
     } catch (err) {
       alert(err.message);
     }
@@ -711,7 +663,7 @@ function Ads({ data, setData }) {
               )}
             </div>
             <div style={{ fontSize: "12px", color: "#64748b", marginTop: "8px" }}>
-              Duration: {ad.duration || 10}s • {ad.fileType}
+              Duration: {ad.duration || 10}s • {ad.permanent ? "☁️ Cloud Saved" : "Local"}
             </div>
             <button onClick={() => deleteAdvertisement(ad)} style={{ marginTop: "10px", padding: "4px 8px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px", width: "100%" }}>
               Delete Ad
@@ -737,8 +689,7 @@ function Ads({ data, setData }) {
   );
 }
 
-/* ================= 4. PLAYLISTS MODULE (WITH EDIT & UNLIMITED ADS) ================= */
-function Playlists({ data, setData }) {
+function Playlists({ data, reload }) {
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({ name: "", adIds: [] });
@@ -746,9 +697,7 @@ function Playlists({ data, setData }) {
   function toggleAd(adId, checked) {
     setForm(curr => ({
       ...curr,
-      adIds: checked
-        ? [...curr.adIds, adId]
-        : curr.adIds.filter(id => id !== adId),
+      adIds: checked ? [...curr.adIds, adId] : curr.adIds.filter(id => id !== adId),
     }));
   }
 
@@ -779,21 +728,20 @@ function Playlists({ data, setData }) {
           : pl
       );
     } else {
-      const playlist = {
+      next = [...data.playlists, {
         id: `pl_${Date.now()}`,
         name: form.name.trim(),
         adIds: form.adIds,
         createdAt: new Date().toISOString(),
-      };
-      next = [...data.playlists, playlist];
+      }];
     }
 
     try {
       await api("/playlists", { method: "PUT", body: JSON.stringify(next) });
-      setData({ ...data, playlists: next });
       setForm({ name: "", adIds: [] });
       setEditingId(null);
       setOpen(false);
+      await reload();
     } catch (err) {
       alert(err.message);
     }
@@ -801,10 +749,9 @@ function Playlists({ data, setData }) {
 
   async function removePlaylist(id) {
     if (!confirm("ఈ Playlist ను తొలగించాలా?")) return;
-    const next = data.playlists.filter(p => p.id !== id);
     try {
-      await api("/playlists", { method: "PUT", body: JSON.stringify(next) });
-      setData({ ...data, playlists: next });
+      await api("/playlists", { method: "PUT", body: JSON.stringify(data.playlists.filter(p => p.id !== id)) });
+      await reload();
     } catch (err) {
       alert(err.message);
     }
@@ -825,7 +772,7 @@ function Playlists({ data, setData }) {
             <div style={{ fontSize: "12px", background: "#f8fafc", padding: "8px", borderRadius: "4px", marginBottom: "10px", maxHeight: "140px", overflowY: "auto" }}>
               {pl.adIds.map((aid, idx) => (
                 <div key={`${aid}_${idx}`} style={{ padding: "2px 0" }}>
-                  {idx + 1}. {data.ads.find(a => a.id === aid)?.name || "Ad (Deleted)"}
+                  {idx + 1}. {data.ads.find(a => a.id === aid)?.name || "Ad"}
                 </div>
               ))}
             </div>
@@ -852,11 +799,11 @@ function Playlists({ data, setData }) {
           title={editingId ? "Edit Playlist & Add More Ads" : "Create New Playlist"}
           close={() => { setOpen(false); setEditingId(null); }}
         >
-          <Field label="Playlist Name (e.g. Hyderabad Prime Loop)" value={form.name} set={v => setForm({ ...form, name: v })} />
+          <Field label="Playlist Name" value={form.name} set={v => setForm({ ...form, name: v })} />
           <div style={{ marginBottom: "15px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
               <label style={{ fontSize: "13px", fontWeight: "600" }}>
-                Select Ads for this Loop ({form.adIds.length} selected)
+                Select Ads ({form.adIds.length} selected)
               </label>
               {data.ads.length > 0 && (
                 <button
@@ -899,8 +846,7 @@ function Playlists({ data, setData }) {
   );
 }
 
-/* ================= 5. SCHEDULES MODULE ================= */
-function Schedules({ data, setData }) {
+function Schedules({ data, reload }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", screenId: "", playlistId: "", start: "09:00", end: "21:00" });
 
@@ -921,11 +867,10 @@ function Schedules({ data, setData }) {
       days: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
       active: true,
     };
-    const next = [...data.schedules, schedule];
     try {
-      await api("/schedules", { method: "PUT", body: JSON.stringify(next) });
-      setData({ ...data, schedules: next });
+      await api("/schedules", { method: "PUT", body: JSON.stringify([...data.schedules, schedule]) });
       setOpen(false);
+      await reload();
     } catch (err) {
       alert(err.message);
     }
@@ -933,10 +878,9 @@ function Schedules({ data, setData }) {
 
   async function removeSchedule(id) {
     if (!confirm("ఈ Schedule ను తొలగించాలా?")) return;
-    const next = data.schedules.filter(s => s.id !== id);
     try {
-      await api("/schedules", { method: "PUT", body: JSON.stringify(next) });
-      setData({ ...data, schedules: next });
+      await api("/schedules", { method: "PUT", body: JSON.stringify(data.schedules.filter(s => s.id !== id)) });
+      await reload();
     } catch (err) {
       alert(err.message);
     }
@@ -1008,15 +952,10 @@ function Schedules({ data, setData }) {
   );
 }
 
-/* ================= 6. LIVE CENTER MODULE ================= */
 function LiveCenter({ data }) {
   return (
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
       <h2 style={{ margin: "0 0 10px" }}>🔴 Live TV Broadcast Center</h2>
-      <p style={{ color: "#64748b", fontSize: "14px", marginBottom: "20px" }}>
-        Monitor all remote screens live from your home and push immediate alerts or override loops.
-      </p>
-
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "15px" }}>
         {data.screens.map(screen => (
           <div key={screen.id} style={{ border: "2px solid #e2e8f0", padding: "15px", borderRadius: "10px", background: screen.status === "online" ? "#f0fdf4" : "#fff" }}>
@@ -1027,17 +966,12 @@ function LiveCenter({ data }) {
               </span>
             </div>
             <p style={{ fontSize: "12px", color: "#64748b", margin: "6px 0" }}>Last Heartbeat: {screen.lastSeen ? new Date(screen.lastSeen).toLocaleTimeString() : "Never"}</p>
-            <div style={{ marginTop: "10px" }}>
-              <button
-                onClick={() => {
-                  const url = `${getServerOrigin()}/?player=${encodeURIComponent(screen.id)}`;
-                  window.open(url, "_blank");
-                }}
-                style={{ width: "100%", padding: "8px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "13px" }}
-              >
-                🖥 Remote Screen Monitor
-              </button>
-            </div>
+            <button
+              onClick={() => window.open(`${getServerOrigin()}/?player=${encodeURIComponent(screen.id)}`, "_blank")}
+              style={{ width: "100%", padding: "8px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "13px", marginTop: "8px" }}
+            >
+              🖥 Remote Screen Monitor
+            </button>
           </div>
         ))}
       </div>
@@ -1045,18 +979,14 @@ function LiveCenter({ data }) {
   );
 }
 
-/* ================= 7. FRANCHISE MODULE ================= */
 function Franchise({ data, setData }) {
-  const [franchises, setFranchises] = useState(data.franchises || []);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", city: "", phone: "", commission: "20%" });
 
-  function saveFranchise() {
+  async function saveFranchise() {
     if (!form.name.trim()) return alert("Franchise Partner Name ఇవ్వండి.");
-    const item = { id: `fr_${Date.now()}`, ...form };
-    const next = [...franchises, item];
-    setFranchises(next);
-    localStorage.setItem("tam_franchises", JSON.stringify(next));
+    const next = [...(data.franchises || []), { id: `fr_${Date.now()}`, ...form }];
+    await api("/franchises", { method: "PUT", body: JSON.stringify(next) });
     setData({ ...data, franchises: next });
     setOpen(false);
   }
@@ -1067,43 +997,36 @@ function Franchise({ data, setData }) {
         <h2 style={{ margin: 0 }}>🏢 Franchise Partners Management</h2>
         <button onClick={() => setOpen(true)} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Add Franchise Partner</button>
       </div>
-
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "15px" }}>
-        {franchises.map(fr => (
+        {(data.franchises || []).map(fr => (
           <div key={fr.id} style={{ border: "1px solid #e2e8f0", padding: "15px", borderRadius: "8px" }}>
             <h3 style={{ margin: "0 0 5px" }}>{fr.name}</h3>
-            <p style={{ margin: "0 0 5px", fontSize: "13px", color: "#64748b" }}>City: {fr.city}</p>
-            <p style={{ margin: "0 0 5px", fontSize: "13px", color: "#64748b" }}>Phone: {fr.phone}</p>
+            <p style={{ margin: "0 0 5px", fontSize: "13px", color: "#64748b" }}>City: {fr.city} • {fr.phone}</p>
             <span style={{ fontSize: "12px", background: "#e0f2fe", color: "#0369a1", padding: "3px 8px", borderRadius: "4px" }}>Revenue Share: {fr.commission}</span>
           </div>
         ))}
       </div>
-
       {open && (
         <Modal title="Add City Franchise Partner" close={() => setOpen(false)}>
           <Field label="Partner Name" value={form.name} set={v => setForm({ ...form, name: v })} />
-          <Field label="Operational City (e.g. Hyderabad / Vizag)" value={form.city} set={v => setForm({ ...form, city: v })} />
+          <Field label="Operational City" value={form.city} set={v => setForm({ ...form, city: v })} />
           <Field label="Phone Number" value={form.phone} set={v => setForm({ ...form, phone: v })} />
-          <Field label="Commission / Revenue Share" value={form.commission} set={v => setForm({ ...form, commission: v })} />
-          <button className="btn" onClick={saveFranchise} style={{ width: "100%", padding: "10px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", marginTop: "10px" }}>Save Partner</button>
+          <Field label="Commission" value={form.commission} set={v => setForm({ ...form, commission: v })} />
+          <button className="btn" onClick={saveFranchise} style={{ width: "100%", padding: "10px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px" }}>Save Partner</button>
         </Modal>
       )}
     </div>
   );
 }
 
-/* ================= 8. CRM MODULE ================= */
 function CRM({ data, setData }) {
-  const [clients, setClients] = useState(data.clients || []);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", business: "", phone: "", budget: "" });
 
-  function saveClient() {
+  async function saveClient() {
     if (!form.name.trim()) return alert("Client Name ఇవ్వండి.");
-    const item = { id: `cl_${Date.now()}`, ...form };
-    const next = [...clients, item];
-    setClients(next);
-    localStorage.setItem("tam_clients", JSON.stringify(next));
+    const next = [...(data.clients || []), { id: `cl_${Date.now()}`, ...form }];
+    await api("/clients", { method: "PUT", body: JSON.stringify(next) });
     setData({ ...data, clients: next });
     setOpen(false);
   }
@@ -1114,18 +1037,17 @@ function CRM({ data, setData }) {
         <h2 style={{ margin: 0 }}>👥 Advertisers & Clients (CRM)</h2>
         <button onClick={() => setOpen(true)} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Add Advertiser</button>
       </div>
-
       <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "14px" }}>
         <thead>
           <tr style={{ borderBottom: "2px solid #e2e8f0" }}>
             <th style={{ padding: "10px" }}>Client Name</th>
-            <th style={{ padding: "10px" }}>Business / Brand</th>
+            <th style={{ padding: "10px" }}>Business</th>
             <th style={{ padding: "10px" }}>Phone</th>
-            <th style={{ padding: "10px" }}>Monthly Budget</th>
+            <th style={{ padding: "10px" }}>Budget</th>
           </tr>
         </thead>
         <tbody>
-          {clients.map(cl => (
+          {(data.clients || []).map(cl => (
             <tr key={cl.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
               <td style={{ padding: "10px", fontWeight: "600" }}>{cl.name}</td>
               <td style={{ padding: "10px" }}>{cl.business}</td>
@@ -1135,32 +1057,27 @@ function CRM({ data, setData }) {
           ))}
         </tbody>
       </table>
-
       {open && (
         <Modal title="Add New Advertiser Client" close={() => setOpen(false)}>
           <Field label="Client Name" value={form.name} set={v => setForm({ ...form, name: v })} />
           <Field label="Shop / Business Name" value={form.business} set={v => setForm({ ...form, business: v })} />
           <Field label="Phone Number" value={form.phone} set={v => setForm({ ...form, phone: v })} />
           <Field label="Monthly Contract (₹)" value={form.budget} set={v => setForm({ ...form, budget: v })} />
-          <button className="btn" onClick={saveClient} style={{ width: "100%", padding: "10px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", marginTop: "10px" }}>Save Client</button>
+          <button className="btn" onClick={saveClient} style={{ width: "100%", padding: "10px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px" }}>Save Client</button>
         </Modal>
       )}
     </div>
   );
 }
 
-/* ================= 9. BILLING MODULE ================= */
 function Billing({ data, setData }) {
-  const [billings, setBillings] = useState(data.billings || []);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ client: "", amount: "", status: "Paid", date: new Date().toISOString().split("T")[0] });
 
-  function saveInvoice() {
+  async function saveInvoice() {
     if (!form.client.trim()) return alert("Client Name ఇవ్వండి.");
-    const item = { id: `inv_${Date.now()}`, ...form };
-    const next = [...billings, item];
-    setBillings(next);
-    localStorage.setItem("tam_billings", JSON.stringify(next));
+    const next = [...(data.billings || []), { id: `inv_${Date.now()}`, ...form }];
+    await api("/billings", { method: "PUT", body: JSON.stringify(next) });
     setData({ ...data, billings: next });
     setOpen(false);
   }
@@ -1171,44 +1088,31 @@ function Billing({ data, setData }) {
         <h2 style={{ margin: 0 }}>💰 Invoices & Billing Management</h2>
         <button onClick={() => setOpen(true)} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Generate Invoice</button>
       </div>
-
       <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "14px" }}>
         <thead>
           <tr style={{ borderBottom: "2px solid #e2e8f0" }}>
             <th style={{ padding: "10px" }}>Client</th>
             <th style={{ padding: "10px" }}>Amount</th>
             <th style={{ padding: "10px" }}>Date</th>
-            <th style={{ padding: "10px" }}>Payment Status</th>
+            <th style={{ padding: "10px" }}>Status</th>
           </tr>
         </thead>
         <tbody>
-          {billings.map(inv => (
+          {(data.billings || []).map(inv => (
             <tr key={inv.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
               <td style={{ padding: "10px", fontWeight: "600" }}>{inv.client}</td>
               <td style={{ padding: "10px", fontWeight: "bold" }}>₹{inv.amount}</td>
               <td style={{ padding: "10px" }}>{inv.date}</td>
-              <td style={{ padding: "10px" }}>
-                <span style={{ padding: "3px 8px", borderRadius: "4px", fontSize: "12px", background: inv.status === "Paid" ? "#dcfce7" : "#fee2e2", color: inv.status === "Paid" ? "#15803d" : "#b91c1c" }}>
-                  {inv.status}
-                </span>
-              </td>
+              <td style={{ padding: "10px" }}>{inv.status}</td>
             </tr>
           ))}
         </tbody>
       </table>
-
       {open && (
         <Modal title="Create Invoicing Entry" close={() => setOpen(false)}>
           <Field label="Advertiser Name" value={form.client} set={v => setForm({ ...form, client: v })} />
           <Field label="Invoice Amount (₹)" type="number" value={form.amount} set={v => setForm({ ...form, amount: v })} />
           <Field label="Date" type="date" value={form.date} set={v => setForm({ ...form, date: v })} />
-          <div style={{ marginBottom: "15px" }}>
-            <label style={{ display: "block", fontSize: "13px", marginBottom: "6px" }}>Status</label>
-            <select value={form.status} onChange={e => setForm({ ...form, status: e.target.value })} style={{ width: "100%", padding: "8px", borderRadius: "6px" }}>
-              <option value="Paid">Paid</option>
-              <option value="Pending">Pending</option>
-            </select>
-          </div>
           <button className="btn" onClick={saveInvoice} style={{ width: "100%", padding: "10px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px" }}>Save Invoice</button>
         </Modal>
       )}
@@ -1216,34 +1120,26 @@ function Billing({ data, setData }) {
   );
 }
 
-/* ================= 10. NEWS & FLASH TICKERS ================= */
 function FlashNews({ data, setData }) {
-  const [tickers, setTickers] = useState(data.tickers || []);
   const [text, setText] = useState("");
 
-  function addTicker() {
+  async function addTicker() {
     if (!text.trim()) return;
-    const next = [...tickers, { id: `tk_${Date.now()}`, text: text.trim(), active: true }];
-    setTickers(next);
-    localStorage.setItem("tam_tickers", JSON.stringify(next));
+    const next = [...(data.tickers || []), { id: `tk_${Date.now()}`, text: text.trim(), active: true }];
+    await api("/tickers", { method: "PUT", body: JSON.stringify(next) });
     setData({ ...data, tickers: next });
     setText("");
   }
 
-  function removeTicker(id) {
-    const next = tickers.filter(t => t.id !== id);
-    setTickers(next);
-    localStorage.setItem("tam_tickers", JSON.stringify(next));
+  async function removeTicker(id) {
+    const next = (data.tickers || []).filter(t => t.id !== id);
+    await api("/tickers", { method: "PUT", body: JSON.stringify(next) });
     setData({ ...data, tickers: next });
   }
 
   return (
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
       <h2 style={{ margin: "0 0 10px" }}>📰 Flash News & Bottom Screen Tickers</h2>
-      <p style={{ color: "#64748b", fontSize: "14px", marginBottom: "15px" }}>
-        టీవీ స్క్రీన్ల క్రింద స్క్రోల్ అయ్యే బ్రేకింగ్ న్యూస్, ఆఫర్స్ మరియు ప్రకటనల సమాచారం.
-      </p>
-
       <div style={{ display: "flex", gap: "10px", marginBottom: "20px" }}>
         <input
           type="text"
@@ -1254,9 +1150,8 @@ function FlashNews({ data, setData }) {
         />
         <button onClick={addTicker} style={{ padding: "10px 20px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>+ Add Scroll Ticker</button>
       </div>
-
       <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-        {tickers.map(tk => (
+        {(data.tickers || []).map(tk => (
           <div key={tk.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px", background: "#f8fafc", borderRadius: "8px", borderLeft: "4px solid #ef4444" }}>
             <span>📢 {tk.text}</span>
             <button onClick={() => removeTicker(tk.id)} style={{ padding: "4px 8px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "4px", cursor: "pointer" }}>Delete</button>
@@ -1267,89 +1162,49 @@ function FlashNews({ data, setData }) {
   );
 }
 
-/* ================= 11. SOCIAL MEDIA SYNC ================= */
 function SocialMedia() {
   return (
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
       <h2>📱 Social Media & YouTube Live Integration</h2>
-      <p style={{ color: "#64748b", fontSize: "14px" }}>
-        Connect your YouTube channels (Telugu Focus TV News, Pentanna TV) to auto-broadcast breaking bulletins or promo songs to all TVs.
-      </p>
-      <div style={{ border: "1px solid #e2e8f0", padding: "15px", borderRadius: "8px", marginTop: "15px" }}>
-        <h3 style={{ margin: "0 0 5px" }}>Auto-Sync YouTube Short / Live Streams</h3>
-        <p style={{ fontSize: "13px", color: "#64748b" }}>Enter YouTube Channel / Video URL to sync with remote TV network</p>
-        <input type="text" placeholder="https://youtube.com/watch?v=..." style={{ width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e1", marginBottom: "10px" }} />
-        <button style={{ padding: "8px 16px", background: "#ef4444", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>Sync Video to All Screens</button>
-      </div>
+      <p style={{ color: "#64748b", fontSize: "14px" }}>Connect your YouTube channels to broadcast bulletins across screens.</p>
     </div>
   );
 }
 
-/* ================= 12. MARKETING & LEADS ================= */
 function MarketingLeads() {
   return (
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
       <h2>📢 Local Digital Marketing & Lead Generation</h2>
-      <p style={{ color: "#64748b", fontSize: "14px" }}>
-        Manage QR code scans from TVs and track customer engagement across Tirupati, Hyderabad, and Vijayawada.
-      </p>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "15px", marginTop: "15px" }}>
-        <div style={{ padding: "15px", background: "#f8fafc", borderRadius: "8px" }}>
-          <div style={{ fontSize: "13px", color: "#64748b" }}>QR Scans Today</div>
-          <div style={{ fontSize: "24px", fontWeight: "bold", color: "#2563eb", marginTop: "5px" }}>128</div>
-        </div>
-        <div style={{ padding: "15px", background: "#f8fafc", borderRadius: "8px" }}>
-          <div style={{ fontSize: "13px", color: "#64748b" }}>Customer Enquiries</div>
-          <div style={{ fontSize: "24px", fontWeight: "bold", color: "#16a34a", marginTop: "5px" }}>34</div>
-        </div>
-        <div style={{ padding: "15px", background: "#f8fafc", borderRadius: "8px" }}>
-          <div style={{ fontSize: "13px", color: "#64748b" }}>Ad Conversion Rate</div>
-          <div style={{ fontSize: "24px", fontWeight: "bold", color: "#9333ea", marginTop: "5px" }}>4.8%</div>
-        </div>
-      </div>
+      <p style={{ color: "#64748b", fontSize: "14px" }}>Track QR code scans and customer engagement across cities.</p>
     </div>
   );
 }
 
-/* ================= 13. AI TOOLS MODULE ================= */
 function AITools() {
   const [prompt, setPrompt] = useState("");
   const [generatedAd, setGeneratedAd] = useState("");
 
   function generateScript() {
     if (!prompt.trim()) return;
-    setGeneratedAd(`🌟 30-Second Commercial Script for ${prompt}:\n\n[Scene 1 - 0 to 5s]: Eye-catching visual with bold Telugu typography introducing ${prompt}.\n[Scene 2 - 5 to 20s]: Highlights special festive discounts, prime location, and trusted quality.\n[Scene 3 - 20 to 30s]: Strong Call to Action: 'Visit today or Call Now! Scan the QR code on TV.'`);
+    setGeneratedAd(`🌟 30-Second Commercial Script for ${prompt}:\n\n[0-5s]: Bold Telugu headline introducing ${prompt}.\n[5-20s]: Special festive offers and location details.\n[20-30s]: Visit today or scan QR code on TV!`);
   }
 
   return (
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
       <h2>🤖 AI Ad Script & Headline Generator</h2>
-      <p style={{ color: "#64748b", fontSize: "14px" }}>
-        AI-assisted tool to write quick Tollywood-style catchy slogans and commercial scripts for local advertisers.
-      </p>
-
-      <div style={{ marginTop: "15px" }}>
-        <label style={{ display: "block", fontSize: "13px", fontWeight: "600", marginBottom: "6px" }}>Shop / Business Name & Offer:</label>
-        <input
-          type="text"
-          value={prompt}
-          onChange={e => setPrompt(e.target.value)}
-          placeholder="ఉదాహరణ: తిరుపతి లక్ష్మి జ్యువెలర్స్ - దసరా 20% డిస్కౌంట్ ఆఫర్"
-          style={{ width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e1", marginBottom: "10px" }}
-        />
-        <button onClick={generateScript} style={{ padding: "10px 20px", background: "#9333ea", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>Generate Ad Script</button>
-      </div>
-
-      {generatedAd && (
-        <div style={{ marginTop: "20px", padding: "15px", background: "#faf5ff", border: "1px solid #e9d5ff", borderRadius: "8px", whiteSpace: "pre-line", fontSize: "14px" }}>
-          {generatedAd}
-        </div>
-      )}
+      <input
+        type="text"
+        value={prompt}
+        onChange={e => setPrompt(e.target.value)}
+        placeholder="Shop / Business Name & Offer..."
+        style={{ width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e1", marginBottom: "10px" }}
+      />
+      <button onClick={generateScript} style={{ padding: "10px 20px", background: "#9333ea", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>Generate Ad Script</button>
+      {generatedAd && <div style={{ marginTop: "20px", padding: "15px", background: "#faf5ff", borderRadius: "8px", whiteSpace: "pre-line" }}>{generatedAd}</div>}
     </div>
   );
 }
 
-/* ================= 14. REPORTS MODULE ================= */
 function Reports({ data }) {
   const rows = useMemo(() => {
     const counts = {};
@@ -1367,12 +1222,8 @@ function Reports({ data }) {
   return (
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
       <h2>📊 Live Ad Proof of Play Reports</h2>
-      <p style={{ color: "#64748b", fontSize: "14px", marginBottom: "15px" }}>
-        ప్రతి ప్రకటన రిమోట్ టీవీలలో ఎన్నిసార్లు ప్రసారమైందో ఖచ్చితమైన సమాచారం.
-      </p>
-
       {rows.length === 0 ? (
-        <div style={{ color: "#94a3b8" }}>ఇంకా playback reporting నమోదు కాలేదు. టీవీ ఆన్ చేసి యాడ్స్ ప్లే చేయగానే ఇక్కడ కనిపిస్తాయి.</div>
+        <div style={{ color: "#94a3b8" }}>ఇంకా playback reporting నమోదు కాలేదు.</div>
       ) : (
         <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "14px" }}>
           <thead>
@@ -1395,8 +1246,9 @@ function Reports({ data }) {
   );
 }
 
-/* ================= 15. SETTINGS MODULE ================= */
-function Settings({ reload }) {
+function Settings({ reload, cloudEnabled }) {
+  const [restoring, setRestoring] = useState(false);
+
   async function downloadBackup() {
     try {
       const backup = await api("/backup");
@@ -1404,7 +1256,7 @@ function Settings({ reload }) {
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = "tv-ad-manager-backup.json";
+      anchor.download = `tv-ad-manager-backup-${new Date().toISOString().slice(0, 10)}.json`;
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -1412,17 +1264,40 @@ function Settings({ reload }) {
     }
   }
 
+  async function restoreBackup(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setRestoring(true);
+    try {
+      const text = await file.text();
+      const json = JSON.parse(text);
+      await api("/restore", { method: "POST", body: JSON.stringify(json) });
+      alert("మీ సెటప్ ఫైల్స్ అన్నీ విజయవంతంగా రిస్టోర్ అయ్యాయి!");
+      await reload();
+    } catch (err) {
+      alert("Restore failed: " + err.message);
+    } finally {
+      setRestoring(false);
+      event.target.value = "";
+    }
+  }
+
   return (
     <div style={{ background: "#fff", padding: "20px", borderRadius: "12px" }}>
-      <h2>⚙ Central Management System Settings</h2>
-      <p style={{ color: "#64748b", fontSize: "14px", marginBottom: "20px" }}>
-        Server Configuration, Cloud Tunnel Sync, and Database Backup.
+      <h2>⚙ Central Management System Settings & Auto-Sync</h2>
+      <p style={{ color: "#64748b", fontSize: "14px", marginBottom: "15px" }}>
+        Storage Status: <b>{cloudEnabled ? "☁️ Permanent Cloudinary Active" : "⚠ Render Local (Add Cloudinary keys in Render Environment for permanent media storage)"}</b>
       </p>
 
-      <div style={{ display: "flex", gap: "10px" }}>
-        <button onClick={downloadBackup} style={{ padding: "10px 20px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer" }}>
-          📥 Download Full Data Backup
+      <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
+        <button onClick={downloadBackup} style={{ padding: "10px 20px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "600" }}>
+          📥 Download Setup Backup (.json)
         </button>
+
+        <label style={{ padding: "10px 20px", background: "#10b981", color: "#fff", borderRadius: "6px", cursor: "pointer", fontWeight: "600", display: "inline-block" }}>
+          {restoring ? "Restoring..." : "📤 Restore Setup File (.json)"}
+          <input type="file" accept=".json,application/json" onChange={restoreBackup} style={{ display: "none" }} disabled={restoring} />
+        </label>
       </div>
     </div>
   );
@@ -1462,7 +1337,6 @@ function formatMinutes(value) {
   return `${String(hours).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 }
 
-/* ================= TV PLAYER MODE ================= */
 function getPlayerScreenId() {
   const params = new URLSearchParams(window.location.search);
   return params.get("player") || params.get("screen") || "";
@@ -1485,7 +1359,7 @@ function PlayerMode({ screenId }) {
 
   useEffect(() => {
     loadPlayer();
-    const timer = setInterval(loadPlayer, 15000);
+    const timer = setInterval(loadPlayer, 10000);
     return () => clearInterval(timer);
   }, [screenId]);
 
