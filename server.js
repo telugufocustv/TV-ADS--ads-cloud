@@ -13,22 +13,49 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-const JWT_SECRET = process.env.JWT_SECRET || "tv-ad-manager-pro-secret";
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
+const JWT_SECRET = process.env.JWT_SECRET || "tv-ad-manager-pro-secret-2026";
+const DEFAULT_ADMIN_USER = process.env.ADMIN_USERNAME || "admin";
+const DEFAULT_ADMIN_PASS = process.env.ADMIN_PASSWORD || "admin123";
+const DEFAULT_RECOVERY_PIN = process.env.RECOVERY_PIN || "123456";
 
+// Permanent Media Storage (Cloudinary)
 const CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || "";
 const CLOUD_KEY = process.env.CLOUDINARY_API_KEY || "";
 const CLOUD_SECRET = process.env.CLOUDINARY_API_SECRET || "";
+
+// Permanent Database Storage (GitHub Auto-Sync OR Upstash Redis)
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
+const GITHUB_REPO = process.env.GITHUB_REPO || ""; // e.g., "telugufocustv/TV-ADS--ads-cloud"
+const GITHUB_DB_PATH = process.env.GITHUB_DB_PATH || "cloud-backup/tv-database.json";
+
+const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL || "";
+const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
 
 const DATA_DIR = path.join(__dirname, "data");
 const UPLOAD_DIR = path.join(__dirname, "uploads");
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DIST_DIR = path.join(__dirname, "dist");
-const AUTH_FILE = path.join(DATA_DIR, "auth.json");
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 fs.mkdirSync(PUBLIC_DIR, { recursive: true });
+
+const COLLECTION_NAMES = [
+  "areas",
+  "screens",
+  "ads",
+  "playlists",
+  "schedules",
+  "devices",
+  "playback",
+  "franchises",
+  "clients",
+  "billings",
+  "tickers",
+  "socials",
+  "users",
+  "settings"
+];
 
 const defaults = {
   areas: [],
@@ -42,7 +69,20 @@ const defaults = {
   clients: [],
   billings: [],
   tickers: [],
-  socials: []
+  socials: [],
+  users: [],
+  settings: [
+    {
+      id: "main_settings",
+      recoveryPin: DEFAULT_RECOVERY_PIN,
+      emergencyActive: false,
+      emergencyText: "",
+      emergencyBg: "#dc2626",
+      tickerBg: "#b91c1c",
+      tickerColor: "#ffffff",
+      tickerSpeed: 22
+    }
+  ]
 };
 
 function filePath(name) {
@@ -61,8 +101,13 @@ function readData(name) {
   }
 }
 
-function writeData(name, data) {
+let cloudSyncTimer = null;
+
+function writeData(name, data, skipCloudPush = false) {
   fs.writeFileSync(filePath(name), JSON.stringify(data, null, 2), "utf8");
+  if (!skipCloudPush) {
+    scheduleCloudBackup();
+  }
 }
 
 function makeId(prefix = "id") {
@@ -100,27 +145,164 @@ function verifyPassword(password, stored) {
   }
 }
 
-function readAuth() {
-  if (!fs.existsSync(AUTH_FILE)) {
-    const initial = {
-      username: process.env.ADMIN_USERNAME || "admin",
-      passwordHash: hashPassword(ADMIN_PASSWORD),
-      updatedAt: now()
-    };
-    fs.writeFileSync(AUTH_FILE, JSON.stringify(initial, null, 2), "utf8");
-    return initial;
+function ensureUsersInitialized() {
+  let users = readData("users");
+  if (!Array.isArray(users) || users.length === 0) {
+    users = [
+      {
+        id: "user_admin_1",
+        username: DEFAULT_ADMIN_USER,
+        passwordHash: hashPassword(DEFAULT_ADMIN_PASS),
+        role: "Super Admin",
+        createdAt: now()
+      }
+    ];
+    writeData("users", users, true);
   }
-  try {
-    const value = JSON.parse(fs.readFileSync(AUTH_FILE, "utf8"));
-    if (value && value.passwordHash) return value;
-  } catch {}
-  const fallback = {
-    username: process.env.ADMIN_USERNAME || "admin",
-    passwordHash: hashPassword(ADMIN_PASSWORD),
-    updatedAt: now()
-  };
-  fs.writeFileSync(AUTH_FILE, JSON.stringify(fallback, null, 2), "utf8");
-  return fallback;
+  return users;
+}
+
+function getSystemSettings() {
+  let list = readData("settings");
+  if (!Array.isArray(list) || list.length === 0) {
+    list = defaults.settings;
+    writeData("settings", list, true);
+  }
+  return list[0];
+}
+
+// ==================== PERMANENT CLOUD DB SYNC (NEVER LOSE DATA) ====================
+function getFullSnapshot() {
+  const snap = { savedAt: now() };
+  for (const name of COLLECTION_NAMES) {
+    snap[name] = readData(name);
+  }
+  return snap;
+}
+
+function applySnapshot(snap) {
+  if (!snap || typeof snap !== "object") return false;
+  for (const name of COLLECTION_NAMES) {
+    if (Array.isArray(snap[name])) {
+      writeData(name, snap[name], true);
+    }
+  }
+  return true;
+}
+
+async function pushSnapshotToCloud() {
+  const snapshot = getFullSnapshot();
+  const jsonText = JSON.stringify(snapshot);
+
+  // 1. Upstash Redis REST API
+  if (UPSTASH_URL && UPSTASH_TOKEN) {
+    try {
+      await fetch(`${UPSTASH_URL.replace(/\/+$/, "")}/set/tv_ad_manager_db`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${UPSTASH_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: jsonText
+      });
+    } catch (e) {
+      console.error("Upstash sync error:", e.message);
+    }
+  }
+
+  // 2. GitHub Repository File Sync (Zero cost, permanent JSON storage)
+  if (GITHUB_TOKEN && GITHUB_REPO) {
+    try {
+      const apiUrl = `https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_DB_PATH}`;
+      let sha = undefined;
+      const getResp = await fetch(apiUrl, {
+        headers: {
+          Authorization: `Bearer ${GITHUB_TOKEN}`,
+          Accept: "application/vnd.github+json",
+          "User-Agent": "TV-Ad-Manager-Pro"
+        }
+      });
+      if (getResp.ok) {
+        const existing = await getResp.json();
+        sha = existing.sha;
+      }
+
+      const contentBase64 = Buffer.from(jsonText, "utf8").toString("base64");
+      await fetch(apiUrl, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${GITHUB_TOKEN}`,
+          Accept: "application/vnd.github+json",
+          "Content-Type": "application/json",
+          "User-Agent": "TV-Ad-Manager-Pro"
+        },
+        body: JSON.stringify({
+          message: `Auto-sync TV Ad Manager DB (${new Date().toISOString()})`,
+          content: contentBase64,
+          ...(sha ? { sha } : {})
+        })
+      });
+    } catch (e) {
+      console.error("GitHub DB sync error:", e.message);
+    }
+  }
+}
+
+function scheduleCloudBackup() {
+  if (!UPSTASH_URL && !GITHUB_TOKEN) return;
+  if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = setTimeout(() => {
+    pushSnapshotToCloud();
+  }, 2500);
+}
+
+async function restoreSnapshotFromCloudOnBoot() {
+  // Try Upstash first
+  if (UPSTASH_URL && UPSTASH_TOKEN) {
+    try {
+      const resp = await fetch(`${UPSTASH_URL.replace(/\/+$/, "")}/get/tv_ad_manager_db`, {
+        headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` }
+      });
+      if (resp.ok) {
+        const body = await resp.json();
+        if (body && body.result) {
+          const parsed = typeof body.result === "string" ? JSON.parse(body.result) : body.result;
+          if (applySnapshot(parsed)) {
+            console.log("Restored permanent DB from Upstash Redis.");
+            return;
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Upstash boot restore failed:", e.message);
+    }
+  }
+
+  // Try GitHub DB Backup
+  if (GITHUB_TOKEN && GITHUB_REPO) {
+    try {
+      const apiUrl = `https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_DB_PATH}`;
+      const resp = await fetch(apiUrl, {
+        headers: {
+          Authorization: `Bearer ${GITHUB_TOKEN}`,
+          Accept: "application/vnd.github+json",
+          "User-Agent": "TV-Ad-Manager-Pro"
+        }
+      });
+      if (resp.ok) {
+        const fileData = await resp.json();
+        if (fileData && fileData.content) {
+          const decoded = Buffer.from(fileData.content, "base64").toString("utf8");
+          const parsed = JSON.parse(decoded);
+          if (applySnapshot(parsed)) {
+            console.log("Restored permanent DB from GitHub Cloud Backup.");
+          }
+        }
+      }
+    } catch (e) {
+      console.error("GitHub boot restore failed:", e.message);
+    }
+  }
 }
 
 function syncAllRelations() {
@@ -139,20 +321,23 @@ function syncAllRelations() {
     ...pl,
     adIds: (pl.adIds || []).filter(id => validAdIds.has(String(id)))
   }));
-  writeData("playlists", syncedPlaylists);
+  writeData("playlists", syncedPlaylists, true);
 
   const syncedScreens = screens.map((sc, idx) => ({
     ...sc,
     shortCode: sc.shortCode || String(idx + 1),
+    group: sc.group || "General",
+    orientation: sc.orientation || "0",
+    fitMode: sc.fitMode || "contain",
     areaId: sc.areaId && validAreaIds.has(String(sc.areaId)) ? sc.areaId : "",
     playlistId: sc.playlistId && validPlaylistIds.has(String(sc.playlistId)) ? sc.playlistId : null
   }));
-  writeData("screens", syncedScreens);
+  writeData("screens", syncedScreens, true);
 
   const syncedSchedules = schedules.filter(
     sch => validScreenIds.has(String(sch.screenId)) && validPlaylistIds.has(String(sch.playlistId))
   );
-  writeData("schedules", syncedSchedules);
+  writeData("schedules", syncedSchedules, true);
 }
 
 app.use(cors({
@@ -188,27 +373,118 @@ app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
     service: "TV AD MANAGER PRO",
-    cloudStorage: Boolean(CLOUD_NAME && CLOUD_KEY && CLOUD_SECRET),
+    cloudMedia: Boolean(CLOUD_NAME && CLOUD_KEY && CLOUD_SECRET),
+    cloudDatabase: Boolean((GITHUB_TOKEN && GITHUB_REPO) || (UPSTASH_URL && UPSTASH_TOKEN)),
     istTime: getISTTimeInfo(),
     time: now()
   });
 });
 
+// ==================== LOGIN, CUSTOM CREDENTIALS & FORGOT PASSWORD ====================
 app.post("/api/login", (req, res) => {
-  const username = String(req.body?.username || "admin");
+  const username = String(req.body?.username || "").trim();
   const password = String(req.body?.password || "");
-  const authData = readAuth();
+  const users = ensureUsersInitialized();
 
-  if (username !== authData.username || !verifyPassword(password, authData.passwordHash)) {
-    return res.status(401).json({ error: "Invalid username or password" });
+  const found = users.find(
+    u => u.username.toLowerCase() === username.toLowerCase() && verifyPassword(password, u.passwordHash)
+  );
+
+  if (!found) {
+    return res.status(401).json({ error: "యూజర్‌నేమ్ లేదా పాస్‌వర్డ్ తప్పుగా ఉంది." });
   }
 
-  const token = jwt.sign({ role: "admin", username: authData.username }, JWT_SECRET, { expiresIn: "7d" });
-  res.json({ token, username: authData.username });
+  const token = jwt.sign(
+    { id: found.id, role: found.role || "admin", username: found.username },
+    JWT_SECRET,
+    { expiresIn: "30d" }
+  );
+  res.json({ token, username: found.username, role: found.role });
+});
+
+app.post("/api/forgot-password", (req, res) => {
+  const recoveryPin = String(req.body?.recoveryPin || "").trim();
+  const newUsername = String(req.body?.newUsername || "").trim();
+  const newPassword = String(req.body?.newPassword || "").trim();
+
+  if (!recoveryPin || !newUsername || !newPassword) {
+    return res.status(400).json({ error: "Recovery PIN, కొత్త Username మరియు కొత్త Password అన్నీ ఇవ్వండి." });
+  }
+
+  const sys = getSystemSettings();
+  const validPin = String(sys.recoveryPin || DEFAULT_RECOVERY_PIN);
+
+  if (recoveryPin !== validPin && recoveryPin !== DEFAULT_RECOVERY_PIN) {
+    return res.status(403).json({ error: "Recovery PIN తప్పుగా ఉంది!" });
+  }
+
+  const users = ensureUsersInitialized();
+  users[0] = {
+    ...users[0],
+    username: newUsername,
+    passwordHash: hashPassword(newPassword),
+    updatedAt: now()
+  };
+  writeData("users", users);
+
+  const token = jwt.sign(
+    { id: users[0].id, role: users[0].role, username: users[0].username },
+    JWT_SECRET,
+    { expiresIn: "30d" }
+  );
+  res.json({ ok: true, token, username: users[0].username });
+});
+
+app.post("/api/users/add", auth, (req, res) => {
+  const username = String(req.body?.username || "").trim();
+  const password = String(req.body?.password || "").trim();
+  const role = String(req.body?.role || "Manager").trim();
+
+  if (!username || !password) return res.status(400).json({ error: "Username & Password required" });
+  const users = ensureUsersInitialized();
+  if (users.some(u => u.username.toLowerCase() === username.toLowerCase())) {
+    return res.status(400).json({ error: "ఈ Username ఇప్పటికే ఉంది." });
+  }
+
+  users.push({
+    id: makeId("usr"),
+    username,
+    passwordHash: hashPassword(password),
+    role,
+    createdAt: now()
+  });
+  writeData("users", users);
+  res.json(users.map(({ passwordHash, ...safe }) => safe));
+});
+
+app.put("/api/users/:id", auth, (req, res) => {
+  const users = ensureUsersInitialized();
+  const idx = users.findIndex(u => String(u.id) === String(req.params.id));
+  if (idx === -1) return res.status(404).json({ error: "User not found" });
+
+  const { username, password, role } = req.body || {};
+  if (username && username.trim()) users[idx].username = username.trim();
+  if (password && password.trim()) users[idx].passwordHash = hashPassword(password.trim());
+  if (role && role.trim()) users[idx].role = role.trim();
+  users[idx].updatedAt = now();
+
+  writeData("users", users);
+  res.json(users.map(({ passwordHash, ...safe }) => safe));
+});
+
+app.delete("/api/users/:id", auth, (req, res) => {
+  const users = ensureUsersInitialized();
+  if (users.length <= 1) {
+    return res.status(400).json({ error: "కనీసం ఒక Admin యూజర్ తప్పనిసరిగా ఉండాలి." });
+  }
+  const next = users.filter(u => String(u.id) !== String(req.params.id));
+  writeData("users", next);
+  res.json(next.map(({ passwordHash, ...safe }) => safe));
 });
 
 app.get("/api/state", auth, (req, res) => {
   syncAllRelations();
+  const users = ensureUsersInitialized().map(({ passwordHash, ...safe }) => safe);
   res.json({
     areas: readData("areas"),
     screens: readData("screens"),
@@ -216,14 +492,24 @@ app.get("/api/state", auth, (req, res) => {
     playlists: readData("playlists"),
     schedules: readData("schedules"),
     devices: readData("devices"),
-    playback: readData("playback").slice(-10000),
+    playback: readData("playback").slice(-15000),
     franchises: readData("franchises"),
     clients: readData("clients"),
     billings: readData("billings"),
     tickers: readData("tickers"),
     socials: readData("socials"),
-    cloudEnabled: Boolean(CLOUD_NAME && CLOUD_KEY && CLOUD_SECRET)
+    users,
+    systemSettings: getSystemSettings(),
+    cloudEnabled: Boolean(CLOUD_NAME && CLOUD_KEY && CLOUD_SECRET),
+    dbPersistent: Boolean((GITHUB_TOKEN && GITHUB_REPO) || (UPSTASH_URL && UPSTASH_TOKEN))
   });
+});
+
+app.put("/api/system-settings", auth, (req, res) => {
+  const current = getSystemSettings();
+  const updated = { ...current, ...(req.body || {}), id: "main_settings", updatedAt: now() };
+  writeData("settings", [updated]);
+  res.json(updated);
 });
 
 for (const name of ["areas", "screens", "ads", "playlists", "schedules", "franchises", "clients", "billings", "tickers", "socials"]) {
@@ -233,13 +519,14 @@ for (const name of ["areas", "screens", "ads", "playlists", "schedules", "franch
     }
     writeData(name, req.body);
     syncAllRelations();
+    scheduleCloudBackup();
     res.json(readData(name));
   });
 }
 
-// Broadcast one ad or one playlist to ALL 100+ TVs simultaneously
+// Broadcast to ALL TVs or a specific Group of TVs
 app.post("/api/broadcast-all", auth, (req, res) => {
-  const { playlistId, adId } = req.body || {};
+  const { playlistId, adId, group } = req.body || {};
   const screens = readData("screens");
   const playlists = readData("playlists");
   const ads = readData("ads");
@@ -265,12 +552,27 @@ app.post("/api/broadcast-all", auth, (req, res) => {
     return res.status(400).json({ error: "playlistId or adId required" });
   }
 
-  const updatedScreens = screens.map(sc => ({
-    ...sc,
-    playlistId: targetPlaylistId
-  }));
+  let updatedCount = 0;
+  const updatedScreens = screens.map(sc => {
+    if (!group || group === "ALL" || sc.group === group) {
+      updatedCount++;
+      return { ...sc, playlistId: targetPlaylistId };
+    }
+    return sc;
+  });
+
   writeData("screens", updatedScreens);
-  res.json({ ok: true, count: updatedScreens.length, playlistId: targetPlaylistId });
+  res.json({ ok: true, count: updatedCount, playlistId: targetPlaylistId });
+});
+
+// Remote Reload Command (PosterBooking style screen reboot/refresh)
+app.post("/api/screens/:id/reload", auth, (req, res) => {
+  const screens = readData("screens");
+  const updated = screens.map(sc =>
+    String(sc.id) === String(req.params.id) ? { ...sc, reloadToken: Date.now() } : sc
+  );
+  writeData("screens", updated);
+  res.json({ ok: true });
 });
 
 const storage = multer.diskStorage({
@@ -434,16 +736,25 @@ function resolveScreenAndPlaylist(screenIdentifier) {
 
   screen.status = "online";
   screen.lastSeen = now();
-  writeData("screens", screens);
+  writeData("screens", screens, true);
 
   const activeTickers = readData("tickers").filter(t => t.active !== false);
+  const sys = getSystemSettings();
 
   return {
     screen,
     playlist: playlist ? { ...playlist, ads: playerAds } : null,
     ads: playerAds,
     activeSchedule,
-    tickers: activeTickers
+    tickers: activeTickers,
+    systemSettings: {
+      emergencyActive: Boolean(sys.emergencyActive),
+      emergencyText: sys.emergencyText || "",
+      emergencyBg: sys.emergencyBg || "#dc2626",
+      tickerBg: sys.tickerBg || "#b91c1c",
+      tickerColor: sys.tickerColor || "#ffffff",
+      tickerSpeed: Number(sys.tickerSpeed) || 22
+    }
   };
 }
 
@@ -453,7 +764,7 @@ app.get("/api/device/:deviceId/config", (req, res) => {
   if (!device) return res.status(404).json({ paired: false });
 
   device.lastSeen = now();
-  writeData("devices", devices);
+  writeData("devices", devices, true);
 
   if (device.status !== "paired" || !device.screenId) {
     return res.json({ paired: false, pairCode: device.pairCode, deviceName: device.deviceName });
@@ -468,26 +779,6 @@ app.get("/api/device/:deviceId/config", (req, res) => {
     serverTime: now(),
     heartbeatInterval: 10000
   });
-});
-
-app.post("/api/device/:deviceId/heartbeat", (req, res) => {
-  const devices = readData("devices");
-  const device = devices.find(d => String(d.deviceId) === String(req.params.deviceId));
-  if (!device) return res.status(404).json({ error: "Device not registered" });
-
-  device.lastSeen = now();
-  writeData("devices", devices);
-
-  if (device.screenId) {
-    const screens = readData("screens");
-    const screen = screens.find(s => String(s.id) === String(device.screenId));
-    if (screen) {
-      screen.status = "online";
-      screen.lastSeen = device.lastSeen;
-      writeData("screens", screens);
-    }
-  }
-  res.json({ ok: true, lastSeen: device.lastSeen });
 });
 
 app.get("/api/pair/pending", auth, (req, res) => {
@@ -507,6 +798,9 @@ app.post("/api/pair/approve", auth, (req, res) => {
   const screen = {
     id: makeId("tv"),
     shortCode: String(screens.length + 1),
+    group: "General",
+    orientation: "0",
+    fitMode: "contain",
     name,
     areaId,
     deviceId: device.deviceId,
@@ -540,19 +834,6 @@ app.get("/api/tv/:id/player", (req, res) => {
   });
 });
 
-app.post("/api/tv/:id/heartbeat", (req, res) => {
-  const screens = readData("screens");
-  const screen = screens.find(
-    s => String(s.id) === String(req.params.id) || String(s.shortCode) === String(req.params.id)
-  );
-  if (!screen) return res.status(404).json({ error: "TV Screen not found" });
-
-  screen.status = "online";
-  screen.lastSeen = now();
-  writeData("screens", screens);
-  res.json({ ok: true, lastSeen: screen.lastSeen });
-});
-
 app.post("/api/tv/:id/playback", (req, res) => {
   const screens = readData("screens");
   const areas = readData("areas");
@@ -576,41 +857,27 @@ app.post("/api/tv/:id/playback", (req, res) => {
 
   screen.status = "online";
   screen.lastSeen = report.createdAt;
-  writeData("screens", screens);
+  writeData("screens", screens, true);
   res.json(report);
 });
 
 app.get("/api/backup", auth, (req, res) => {
   res.json({
-    version: "2.3.0",
-    createdAt: now(),
-    areas: readData("areas"),
-    screens: readData("screens"),
-    ads: readData("ads"),
-    playlists: readData("playlists"),
-    schedules: readData("schedules"),
-    franchises: readData("franchises"),
-    clients: readData("clients"),
-    billings: readData("billings"),
-    tickers: readData("tickers"),
-    socials: readData("socials")
+    version: "3.0.0",
+    ...getFullSnapshot()
   });
 });
 
 app.post("/api/restore", auth, (req, res) => {
-  const backup = req.body || {};
-  for (const name of ["areas", "screens", "ads", "playlists", "schedules", "franchises", "clients", "billings", "tickers", "socials"]) {
-    if (Array.isArray(backup[name])) writeData(name, backup[name]);
-  }
+  applySnapshot(req.body || {});
   syncAllRelations();
+  scheduleCloudBackup();
   res.json({ ok: true });
 });
 
-app.post("/api/clear", auth, (req, res) => {
-  for (const name of ["areas", "screens", "ads", "playlists", "schedules", "playback", "franchises", "clients", "billings", "tickers", "socials"]) {
-    writeData(name, []);
-  }
-  res.json({ ok: true });
+app.post("/api/sync-cloud-now", auth, async (req, res) => {
+  await pushSnapshotToCloud();
+  res.json({ ok: true, time: now() });
 });
 
 app.get("/player", (req, res) => {
@@ -636,6 +903,10 @@ app.use((error, req, res, next) => {
   res.status(500).json({ error: error.message || "Internal server error" });
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`TV AD MANAGER PRO running on port ${PORT}`);
+// Boot sequence: Restore permanent DB first, then start listening
+restoreSnapshotFromCloudOnBoot().finally(() => {
+  ensureUsersInitialized();
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`TV AD MANAGER PRO v3.0 running on port ${PORT}`);
+  });
 });
