@@ -1,4 +1,3 @@
-d
 import { useEffect, useMemo, useState } from "react";
 
 const DEFAULT_API = "/api";
