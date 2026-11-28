@@ -360,7 +360,7 @@ function Login({ onLogin }) {
 
           <div className="field" style={{ marginBottom: "15px" }}>
             <label style={{ display: "block", fontSize: "13px", fontWeight: "600", marginBottom: "5px" }}>Password</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1" }} placeholder="Enter Password" autoFocus required />
+            <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter Password" autoFocus required />
           </div>
 
           {error && <div style={{ padding: "10px", background: "#fee2e2", color: "#991b1b", borderRadius: "8px", marginBottom: "12px", fontSize: "13px" }}>{error}</div>}
@@ -385,11 +385,11 @@ function Login({ onLogin }) {
           </div>
           <div className="field" style={{ marginBottom: "12px" }}>
             <label style={{ display: "block", fontSize: "13px", fontWeight: "600", marginBottom: "5px" }}>Master Recovery Key</label>
-            <input type="password" value={masterKey} onChange={(e) => setMasterKey(e.target.value)} placeholder="Default: TIRUPATI2026" style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1" }} required />
+            <PasswordInput value={masterKey} onChange={(e) => setMasterKey(e.target.value)} placeholder="Default: 123456 or TIRUPATI2026" required />
           </div>
           <div className="field" style={{ marginBottom: "15px" }}>
             <label style={{ display: "block", fontSize: "13px", fontWeight: "600", marginBottom: "5px" }}>New Password</label>
-            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="New Password" style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1" }} required />
+            <PasswordInput value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="New Password" required />
           </div>
           {error && <div style={{ padding: "10px", background: "#fee2e2", color: "#991b1b", borderRadius: "8px", marginBottom: "12px", fontSize: "13px" }}>{error}</div>}
           <button className="btn" style={{ width: "100%", padding: "12px", background: "#10b981", color: "#fff", border: "none", borderRadius: "8px", fontWeight: "bold", cursor: "pointer" }} disabled={busy}>
@@ -1116,7 +1116,7 @@ function LiveCenter({ data, reload }) {
   }
 
   async function toggleEmergency(active) {
-    await api("/brand-settings", {
+    await api("/system-settings", {
       method: "PUT",
       body: JSON.stringify({
         emergencyActive: active,
@@ -1221,7 +1221,7 @@ function BrandLayoutSettings({ data, reload }) {
   }
 
   async function saveBrandSettings() {
-    await api("/brand-settings", { method: "PUT", body: JSON.stringify(form) });
+    await api("/system-settings", { method: "PUT", body: JSON.stringify(form) });
     alert("లోగో మరియు స్క్రీన్ లేఅవుట్ సెట్టింగ్స్ సేవ్ అయ్యాయి!");
     await reload();
   }
@@ -2037,7 +2037,7 @@ function Settings({ data, reload }) {
             <option value="Admin">Admin</option>
             <option value="Manager">Manager</option>
           </select>
-          <input type="password" placeholder={userForm.id ? "New Password (Optional)" : "Create Password"} value={userForm.password} onChange={e => setUserForm({ ...userForm, password: e.target.value })} style={{ padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e1" }} required={!userForm.id} />
+          <PasswordInput placeholder={userForm.id ? "New Password (Optional)" : "Create Password"} value={userForm.password} onChange={e => setUserForm({ ...userForm, password: e.target.value })} required={!userForm.id} />
           <button type="submit" style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", fontWeight: "bold", cursor: "pointer" }}>
             {userForm.id ? "Update User" : "+ Create User"}
           </button>
@@ -2080,6 +2080,40 @@ function Settings({ data, reload }) {
           </label>
         </div>
       </div>
+    </div>
+  );
+}
+
+function PasswordInput({ value, onChange, placeholder = "Enter Password", required = false, autoFocus = false }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div style={{ position: "relative", display: "flex", alignItems: "center", width: "100%" }}>
+      <input
+        type={show ? "text" : "password"}
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        required={required}
+        autoFocus={autoFocus}
+        style={{ width: "100%", padding: "10px 40px 10px 10px", borderRadius: "8px", border: "1px solid #cbd5e1", boxSizing: "border-box" }}
+      />
+      <button
+        type="button"
+        onClick={() => setShow(!show)}
+        title={show ? "Hide Password" : "Show Password"}
+        style={{
+          position: "absolute",
+          right: "8px",
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+          fontSize: "16px",
+          padding: "4px",
+          color: "#475569"
+        }}
+      >
+        {show ? "🙈" : "👁️"}
+      </button>
     </div>
   );
 }
