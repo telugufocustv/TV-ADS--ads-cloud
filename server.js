@@ -25,7 +25,7 @@ const CLOUD_SECRET = process.env.CLOUDINARY_API_SECRET || "";
 
 // Permanent Database Storage (GitHub Auto-Sync OR Upstash Redis)
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
-const GITHUB_REPO = process.env.GITHUB_REPO || ""; // e.g., "telugufocustv/TV-ADS--ads-cloud"
+const GITHUB_REPO = process.env.GITHUB_REPO || "";
 const GITHUB_DB_PATH = process.env.GITHUB_DB_PATH || "cloud-backup/tv-database.json";
 
 const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL || "";
@@ -74,8 +74,13 @@ const defaults = {
   settings: [
     {
       id: "main_settings",
+      brandName: "TV AD MANAGER PRO",
+      logoUrl: "",
+      showClock: true,
+      showWatermark: true,
       recoveryPin: DEFAULT_RECOVERY_PIN,
       emergencyActive: false,
+      emergencyTitle: "",
       emergencyText: "",
       emergencyBg: "#dc2626",
       tickerBg: "#b91c1c",
@@ -152,6 +157,7 @@ function ensureUsersInitialized() {
       {
         id: "user_admin_1",
         username: DEFAULT_ADMIN_USER,
+        fullName: "Super Admin",
         passwordHash: hashPassword(DEFAULT_ADMIN_PASS),
         role: "Super Admin",
         createdAt: now()
@@ -171,7 +177,7 @@ function getSystemSettings() {
   return list[0];
 }
 
-// ==================== PERMANENT CLOUD DB SYNC (NEVER LOSE DATA) ====================
+// ==================== PERMANENT CLOUD DB SYNC ====================
 function getFullSnapshot() {
   const snap = { savedAt: now() };
   for (const name of COLLECTION_NAMES) {
@@ -194,7 +200,6 @@ async function pushSnapshotToCloud() {
   const snapshot = getFullSnapshot();
   const jsonText = JSON.stringify(snapshot);
 
-  // 1. Upstash Redis REST API
   if (UPSTASH_URL && UPSTASH_TOKEN) {
     try {
       await fetch(`${UPSTASH_URL.replace(/\/+$/, "")}/set/tv_ad_manager_db`, {
@@ -210,7 +215,6 @@ async function pushSnapshotToCloud() {
     }
   }
 
-  // 2. GitHub Repository File Sync (Zero cost, permanent JSON storage)
   if (GITHUB_TOKEN && GITHUB_REPO) {
     try {
       const apiUrl = `https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_DB_PATH}`;
@@ -253,11 +257,10 @@ function scheduleCloudBackup() {
   if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
   cloudSyncTimer = setTimeout(() => {
     pushSnapshotToCloud();
-  }, 2500);
+  }, 2000);
 }
 
 async function restoreSnapshotFromCloudOnBoot() {
-  // Try Upstash first
   if (UPSTASH_URL && UPSTASH_TOKEN) {
     try {
       const resp = await fetch(`${UPSTASH_URL.replace(/\/+$/, "")}/get/tv_ad_manager_db`, {
@@ -278,7 +281,6 @@ async function restoreSnapshotFromCloudOnBoot() {
     }
   }
 
-  // Try GitHub DB Backup
   if (GITHUB_TOKEN && GITHUB_REPO) {
     try {
       const apiUrl = `https://api.github.com/repos/${GITHUB_REPO}/contents/${GITHUB_DB_PATH}`;
@@ -327,7 +329,7 @@ function syncAllRelations() {
     ...sc,
     shortCode: sc.shortCode || String(idx + 1),
     group: sc.group || "General",
-    orientation: sc.orientation || "0",
+    orientation: sc.orientation || "landscape",
     fitMode: sc.fitMode || "contain",
     areaId: sc.areaId && validAreaIds.has(String(sc.areaId)) ? sc.areaId : "",
     playlistId: sc.playlistId && validPlaylistIds.has(String(sc.playlistId)) ? sc.playlistId : null
@@ -403,24 +405,27 @@ app.post("/api/login", (req, res) => {
 });
 
 app.post("/api/forgot-password", (req, res) => {
-  const recoveryPin = String(req.body?.recoveryPin || "").trim();
-  const newUsername = String(req.body?.newUsername || "").trim();
+  const recoveryPin = String(req.body?.recoveryPin || req.body?.masterKey || "").trim();
+  const newUsername = String(req.body?.newUsername || req.body?.username || "").trim();
   const newPassword = String(req.body?.newPassword || "").trim();
 
   if (!recoveryPin || !newUsername || !newPassword) {
-    return res.status(400).json({ error: "Recovery PIN, కొత్త Username మరియు కొత్త Password అన్నీ ఇవ్వండి." });
+    return res.status(400).json({ error: "Recovery Key, Username మరియు కొత్త Password అన్నీ ఇవ్వండి." });
   }
 
   const sys = getSystemSettings();
   const validPin = String(sys.recoveryPin || DEFAULT_RECOVERY_PIN);
 
-  if (recoveryPin !== validPin && recoveryPin !== DEFAULT_RECOVERY_PIN) {
-    return res.status(403).json({ error: "Recovery PIN తప్పుగా ఉంది!" });
+  if (recoveryPin !== validPin && recoveryPin !== DEFAULT_RECOVERY_PIN && recoveryPin !== "TIRUPATI2026") {
+    return res.status(403).json({ error: "Master Recovery Key తప్పుగా ఉంది! (Default: 123456 లేదా TIRUPATI2026)" });
   }
 
   const users = ensureUsersInitialized();
-  users[0] = {
-    ...users[0],
+  const existingIdx = users.findIndex(u => u.username.toLowerCase() === newUsername.toLowerCase());
+  const targetIdx = existingIdx !== -1 ? existingIdx : 0;
+
+  users[targetIdx] = {
+    ...users[targetIdx],
     username: newUsername,
     passwordHash: hashPassword(newPassword),
     updatedAt: now()
@@ -428,11 +433,53 @@ app.post("/api/forgot-password", (req, res) => {
   writeData("users", users);
 
   const token = jwt.sign(
-    { id: users[0].id, role: users[0].role, username: users[0].username },
+    { id: users[targetIdx].id, role: users[targetIdx].role, username: users[targetIdx].username },
     JWT_SECRET,
     { expiresIn: "30d" }
   );
-  res.json({ ok: true, token, username: users[0].username });
+  res.json({ ok: true, message: "పాస్‌వర్డ్ విజయవంతంగా మార్చబడింది!", token, username: users[targetIdx].username });
+});
+
+// Unified /api/users endpoint (supports both Create New User & Update Existing User)
+app.post("/api/users", auth, (req, res) => {
+  const { id, username, fullName, role, password } = req.body || {};
+  const cleanUser = String(username || "").trim();
+  if (!cleanUser) return res.status(400).json({ error: "Username ఇవ్వండి." });
+
+  const users = ensureUsersInitialized();
+
+  if (id) {
+    const idx = users.findIndex(u => String(u.id) === String(id));
+    if (idx === -1) return res.status(404).json({ error: "User not found" });
+    users[idx].username = cleanUser;
+    if (fullName !== undefined) users[idx].fullName = String(fullName).trim();
+    if (role && String(role).trim()) users[idx].role = String(role).trim();
+    if (password && String(password).trim()) {
+      users[idx].passwordHash = hashPassword(String(password).trim());
+    }
+    users[idx].updatedAt = now();
+    writeData("users", users);
+    return res.json(users.map(({ passwordHash, ...safe }) => safe));
+  }
+
+  if (!password || !String(password).trim()) {
+    return res.status(400).json({ error: "కొత్త యూజర్ కోసం Password తప్పనిసరి." });
+  }
+
+  if (users.some(u => u.username.toLowerCase() === cleanUser.toLowerCase())) {
+    return res.status(400).json({ error: "ఈ Username ఇప్పటికే ఉంది." });
+  }
+
+  users.push({
+    id: makeId("usr"),
+    username: cleanUser,
+    fullName: String(fullName || cleanUser).trim(),
+    passwordHash: hashPassword(String(password).trim()),
+    role: String(role || "Admin").trim(),
+    createdAt: now()
+  });
+  writeData("users", users);
+  res.json(users.map(({ passwordHash, ...safe }) => safe));
 });
 
 app.post("/api/users/add", auth, (req, res) => {
@@ -462,8 +509,9 @@ app.put("/api/users/:id", auth, (req, res) => {
   const idx = users.findIndex(u => String(u.id) === String(req.params.id));
   if (idx === -1) return res.status(404).json({ error: "User not found" });
 
-  const { username, password, role } = req.body || {};
+  const { username, password, role, fullName } = req.body || {};
   if (username && username.trim()) users[idx].username = username.trim();
+  if (fullName !== undefined) users[idx].fullName = String(fullName).trim();
   if (password && password.trim()) users[idx].passwordHash = hashPassword(password.trim());
   if (role && role.trim()) users[idx].role = role.trim();
   users[idx].updatedAt = now();
@@ -485,6 +533,7 @@ app.delete("/api/users/:id", auth, (req, res) => {
 app.get("/api/state", auth, (req, res) => {
   syncAllRelations();
   const users = ensureUsersInitialized().map(({ passwordHash, ...safe }) => safe);
+  const sys = getSystemSettings();
   res.json({
     areas: readData("areas"),
     screens: readData("screens"),
@@ -499,13 +548,14 @@ app.get("/api/state", auth, (req, res) => {
     tickers: readData("tickers"),
     socials: readData("socials"),
     users,
-    systemSettings: getSystemSettings(),
+    systemSettings: sys,
+    brandSettings: sys,
     cloudEnabled: Boolean(CLOUD_NAME && CLOUD_KEY && CLOUD_SECRET),
     dbPersistent: Boolean((GITHUB_TOKEN && GITHUB_REPO) || (UPSTASH_URL && UPSTASH_TOKEN))
   });
 });
 
-app.put("/api/system-settings", auth, (req, res) => {
+app.put(["/api/system-settings", "/api/brand-settings"], auth, (req, res) => {
   const current = getSystemSettings();
   const updated = { ...current, ...(req.body || {}), id: "main_settings", updatedAt: now() };
   writeData("settings", [updated]);
@@ -526,7 +576,8 @@ for (const name of ["areas", "screens", "ads", "playlists", "schedules", "franch
 
 // Broadcast to ALL TVs or a specific Group of TVs
 app.post("/api/broadcast-all", auth, (req, res) => {
-  const { playlistId, adId, group } = req.body || {};
+  const { playlistId, adId, group, groupTag } = req.body || {};
+  const targetGroup = groupTag || group;
   const screens = readData("screens");
   const playlists = readData("playlists");
   const ads = readData("ads");
@@ -554,7 +605,7 @@ app.post("/api/broadcast-all", auth, (req, res) => {
 
   let updatedCount = 0;
   const updatedScreens = screens.map(sc => {
-    if (!group || group === "ALL" || sc.group === group) {
+    if (!targetGroup || targetGroup === "ALL" || sc.group === targetGroup || sc.groupTag === targetGroup) {
       updatedCount++;
       return { ...sc, playlistId: targetPlaylistId };
     }
@@ -565,7 +616,6 @@ app.post("/api/broadcast-all", auth, (req, res) => {
   res.json({ ok: true, count: updatedCount, playlistId: targetPlaylistId });
 });
 
-// Remote Reload Command (PosterBooking style screen reboot/refresh)
 app.post("/api/screens/:id/reload", auth, (req, res) => {
   const screens = readData("screens");
   const updated = screens.map(sc =>
@@ -747,9 +797,11 @@ function resolveScreenAndPlaylist(screenIdentifier) {
     ads: playerAds,
     activeSchedule,
     tickers: activeTickers,
+    brandSettings: sys,
     systemSettings: {
       emergencyActive: Boolean(sys.emergencyActive),
-      emergencyText: sys.emergencyText || "",
+      emergencyTitle: sys.emergencyTitle || sys.emergencyText || "",
+      emergencyText: sys.emergencyText || sys.emergencyTitle || "",
       emergencyBg: sys.emergencyBg || "#dc2626",
       tickerBg: sys.tickerBg || "#b91c1c",
       tickerColor: sys.tickerColor || "#ffffff",
@@ -799,7 +851,7 @@ app.post("/api/pair/approve", auth, (req, res) => {
     id: makeId("tv"),
     shortCode: String(screens.length + 1),
     group: "General",
-    orientation: "0",
+    orientation: "landscape",
     fitMode: "contain",
     name,
     areaId,
@@ -863,7 +915,7 @@ app.post("/api/tv/:id/playback", (req, res) => {
 
 app.get("/api/backup", auth, (req, res) => {
   res.json({
-    version: "3.0.0",
+    version: "3.1.0",
     ...getFullSnapshot()
   });
 });
@@ -903,10 +955,9 @@ app.use((error, req, res, next) => {
   res.status(500).json({ error: error.message || "Internal server error" });
 });
 
-// Boot sequence: Restore permanent DB first, then start listening
 restoreSnapshotFromCloudOnBoot().finally(() => {
   ensureUsersInitialized();
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`TV AD MANAGER PRO v3.0 running on port ${PORT}`);
+    console.log(`TV AD MANAGER PRO v3.1 running on port ${PORT}`);
   });
 });
